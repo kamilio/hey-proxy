@@ -1,0 +1,30 @@
+{
+  "listen": "127.0.0.1:8080",
+  "providers": {
+    "openai": {
+      "api_keys": {
+        "default": "sh://printf '%s' \"$OPENAI_API_KEY\""
+      }
+    }
+  },
+  "aliases": [
+    {
+      "from": "coding",
+      "to": "gpt-4.1"
+    },
+    {
+      "from": "fast",
+      "to": "gpt-4.1-mini"
+    },
+    {
+      "from": "reasoning",
+      "to": "gpt-5",
+      "reasoning_routes": {
+        "low": {
+          "to": "gpt-5-mini"
+        }
+      }
+    }
+  ],
+  "fallbacks": {}
+}

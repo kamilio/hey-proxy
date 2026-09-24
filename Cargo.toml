@@ -1,0 +1,45 @@
+[package]
+name = "hey-proxy"
+version = "0.1.0"
+edition = "2024"
+description = "Local OpenAI and Gemini proxy with model overwrites, fallbacks, and a request dashboard"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/kamilio/hey-proxy"
+include = ["/Cargo.toml", "/Cargo.lock", "/README.md", "/LICENSE", "/src/**/*.rs", "/src/**/*.py", "/src/**/*.sh", "/src/**/*.js", "/src/**/*.html", "/src/**/*.json", "/tests/*.rs", "/tests/*.py", "/tests/*.cjs", "/examples/*.json", "/docs/*.md", "/scripts/*.py"]
+
+[dependencies]
+aes-gcm-siv = "0.11"
+base64 = "0.22"
+sha2 = "0.10"
+url = "2"
+google-cloud-auth = { version = "1.16", default-features = false }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+fs2 = "0.4"
+libc = "0.2"
+toml_edit = "0.23"
+async-stream = "0.3"
+anyhow = "1"
+axum = "0.8"
+clap = { version = "4", features = ["derive"] }
+httpdate = "1"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jsonschema = { version = "0.57", default-features = false }
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"
+tokio-util = { version = "0.7.19", features = ["io"] }
+multer = "3.1.0"
+hyper = { version = "1.11.1", features = ["client", "http1"] }
+hyper-util = { version = "0.1.20", features = ["tokio"] }
+futures-util = "0.3.34"
+percent-encoding = "2.3.2"
+tokio-tungstenite = "0.30.0"
+rusqlite = { version = "0.38", features = ["bundled", "hooks"] }
+http-body = "1"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }

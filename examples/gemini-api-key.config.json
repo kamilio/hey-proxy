@@ -1,0 +1,14 @@
+{
+  "listen": "127.0.0.1:8080",
+  "providers": {
+    "openai": {
+      "api_keys": {}
+    },
+    "gemini": {
+      "auth": "api_key",
+      "api_key": "sh://printf '%s' \"$GEMINI_API_KEY\""
+    }
+  },
+  "aliases": [],
+  "fallbacks": {}
+}

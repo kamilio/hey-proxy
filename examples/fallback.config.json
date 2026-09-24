@@ -1,0 +1,16 @@
+{
+  "listen": "127.0.0.1:8080",
+  "providers": {
+    "openai": {
+      "api_keys": {
+        "default": "op://MyVault/OpenAI/credential"
+      }
+    }
+  },
+  "aliases": [],
+  "fallbacks": {
+    "gpt-4.1": [
+      "gpt-4.1-mini"
+    ]
+  }
+}
