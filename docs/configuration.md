@@ -30,6 +30,12 @@ An alias's `api_key` is the project name, never the key itself. A reasoning rout
 
 `providers.openai.upstream_url` defaults to `https://api.openai.com`. Set it to a compatible API's service root if needed. `providers.openai.credential_cache_seconds` and `providers.gemini.credential_cache_seconds` control command-result caching; each defaults to 2400 seconds. Native ADC manages its own token refresh.
 
+## API-specific overwrites
+
+An alias may include `api_shape`: `responses`, `chat_completions`, or legacy `completions`. It gates the whole rule, including model, API key, reasoning overrides, and reasoning routes. Unscoped rules retain their previous behavior. The same `from` can appear in disjoint shapes; duplicate or overlapping shapes are invalid.
+
+Shapes are identified from the endpoint, not payload fields. Responses includes HTTP, streaming, WebSockets, and `/v1/responses/compact`. Chat Completions includes `/v1/chat/completions` and the custom adapter at `/v1/custom/chat/completions`. Scoped rules do not affect model metadata, audio, Realtime, or native Gemini endpoints. Matching ignores a trailing slash and query parameters. Alias targets are still resolved only once.
+
 ## Applying edits
 
 Routing, providers, credentials, and fallback rules reload for new requests. In-flight requests keep their original snapshot. Invalid changes keep the previous configuration active and print an error. Changing `listen` or persistent logging options requires a restart.

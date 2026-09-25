@@ -23,7 +23,8 @@
         "low": {
           "to": "gpt-5-mini"
         }
-      }
+      },
+      "api_shape": "responses"
     }
   ],
   "fallbacks": {}

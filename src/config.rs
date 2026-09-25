@@ -279,6 +279,8 @@ impl Default for DefaultRoute {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Alias {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_shape: Option<ApiShape>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub reasoning_routes: BTreeMap<String, ReasoningRoute>,
     pub from: String,
@@ -288,6 +290,36 @@ pub struct Alias {
     pub reasoning: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiShape {
+    Responses,
+    ChatCompletions,
+    Completions,
+}
+
+impl ApiShape {
+    pub fn from_path(path: &str) -> Option<Self> {
+        match path.trim_end_matches('/') {
+            "/v1/responses" | "/responses" | "/v1/responses/compact" | "/responses/compact" => {
+                Some(Self::Responses)
+            }
+            "/v1/chat/completions" | "/chat/completions" | "/v1/custom/chat/completions" => {
+                Some(Self::ChatCompletions)
+            }
+            "/v1/completions" | "/completions" => Some(Self::Completions),
+            _ => None,
+        }
+    }
+}
+
+impl Alias {
+    pub fn matches_shape(&self, path: &str) -> bool {
+        self.api_shape
+            .is_none_or(|shape| Some(shape) == ApiShape::from_path(path))
+    }
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -381,6 +413,7 @@ impl Config {
             },
             aliases: vec![
                 Alias {
+                    api_shape: None,
                     reasoning_routes: BTreeMap::new(),
                     from: "model-primary".into(),
                     to: None,
@@ -388,6 +421,7 @@ impl Config {
                     api_key: Some("primary".into()),
                 },
                 Alias {
+                    api_shape: None,
                     reasoning_routes: BTreeMap::new(),
                     from: "gpt-4.1".into(),
                     to: Some("gpt-4.1-mini".into()),
@@ -401,6 +435,12 @@ impl Config {
 }
 
 impl Config {
+    pub fn alias_for(&self, model: &str, path: &str) -> Option<&Alias> {
+        self.aliases
+            .iter()
+            .find(|alias| alias.from == model && alias.matches_shape(path))
+    }
+
     pub fn local_address(&self) -> SocketAddr {
         if self.listen.ip().is_unspecified() {
             let ip = if self.listen.is_ipv6() {
@@ -595,8 +635,15 @@ impl Config {
                     bail!("Reasoning route references an unknown API key project");
                 }
             }
-            if alias.from.is_empty() || !seen.insert(&alias.from) {
-                bail!("Alias source names must be nonempty and unique");
+            if alias.from.is_empty() || !seen.insert((&alias.from, alias.api_shape)) {
+                bail!("Alias source names must be nonempty and unique per API shape");
+            }
+            if self.aliases.iter().any(|other| {
+                !std::ptr::eq(alias, other)
+                    && alias.from == other.from
+                    && (alias.api_shape.is_none() || other.api_shape.is_none())
+            }) {
+                bail!("Alias API shapes must not overlap for the same source name");
             }
             if alias.to.as_ref().is_some_and(|s| s.trim().is_empty())
                 || alias
@@ -751,6 +798,53 @@ mod tests {
         let unsupported = serde_json::json!({"listen":"127.0.0.1:8080","providers":{"unknown":{}}});
         assert!(serde_json::from_value::<Config>(unsupported).is_err());
     }
+    #[test]
+    fn api_shape_validation_roundtrip_and_disjoint_rules() {
+        let mut config = Config::test_fixture();
+        config.aliases = serde_json::from_value(serde_json::json!([
+            {"from":"same","to":"responses-target","api_shape":"responses"},
+            {"from":"same","to":"chat-target","api_shape":"chat_completions"},
+            {"from":"same","to":"legacy-target","api_shape":"completions"}
+        ]))
+        .unwrap();
+        config.validate().unwrap();
+        let value = serde_json::to_value(&config).unwrap();
+        let roundtrip: Config = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            roundtrip
+                .alias_for("same", "/v1/responses/")
+                .unwrap()
+                .to
+                .as_deref(),
+            Some("responses-target")
+        );
+        assert_eq!(
+            roundtrip
+                .alias_for("same", "/v1/custom/chat/completions")
+                .unwrap()
+                .to
+                .as_deref(),
+            Some("chat-target")
+        );
+        assert_eq!(
+            roundtrip
+                .alias_for("same", "/v1/completions")
+                .unwrap()
+                .to
+                .as_deref(),
+            Some("legacy-target")
+        );
+        assert!(roundtrip.alias_for("same", "/v1/models/same").is_none());
+        config.aliases.push(config.aliases[0].clone());
+        assert!(config.validate().is_err());
+        config.aliases.pop();
+        config.aliases[0].api_shape = None;
+        assert!(config.validate().is_err());
+        let mut invalid = value;
+        invalid["aliases"][0]["api_shape"] = serde_json::json!("response");
+        assert!(serde_json::from_value::<Config>(invalid).is_err());
+    }
+
     #[test]
     fn rejects_unknown_projects_duplicates_and_unbounded_retry() {
         let mut config = Config::test_fixture();

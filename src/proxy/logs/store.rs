@@ -261,7 +261,7 @@ impl Store {
         let alias = envelope
             .get("model")
             .and_then(Value::as_str)
-            .and_then(|model| config.aliases.iter().find(|a| a.from == model));
+            .and_then(|model| config.alias_for(model, path));
         let matched =
             alias.is_some_and(|a| effort.is_some_and(|e| a.reasoning_routes.contains_key(e)));
         let rule = if matched {

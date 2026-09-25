@@ -101,6 +101,14 @@ To select a destination based on the incoming reasoning effort:
 
 `reasoning` uses `gpt-5-mini` for low-effort requests and `gpt-5` otherwise. `careful` always sends high reasoning effort. Use models that support the reasoning options you select.
 
+Restrict a rule to an API shape with `"api_shape": "responses"`, `"chat_completions"`, or `"completions"`. Omit the field to keep applying it everywhere. Separate rules can share a `from` name when their shapes differ; overlapping rules are rejected.
+
+```json
+{"from": "coding", "to": "responses-model", "api_shape": "responses"}
+```
+
+For a chat-only client using a Responses model or Gemini, set its base URL to **`http://127.0.0.1:8080/v1/custom`**. The [custom Chat Completions adapter](docs/custom-chat-completions.md) supports streaming, tools, and OpenRouter-style reasoning replay.
+
 Model routing and credential changes apply to new requests without restarting. Invalid edits leave the last valid config active. See the complete [overwrite example](examples/overwrites.config.json).
 
 ## Set up Gemini

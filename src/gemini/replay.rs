@@ -13,6 +13,14 @@ impl ReasoningCodec {
     pub fn new(key: &[u8; 32]) -> Self {
         Self(Aes256GcmSiv::new(key.into()))
     }
+    /// Recover the authenticated visible output when adapting a flattened chat
+    /// message back to Responses. Native signatures remain inside the carrier.
+    pub fn replay_items(&self, model: &str, carrier: &str) -> Result<Vec<Value>> {
+        self.open(model, carrier)?["items"]
+            .as_array()
+            .cloned()
+            .ok_or_else(|| anyhow!("Invalid Gemini replay items"))
+    }
     pub(crate) fn seal(&self, model: &str, parts: &Value, items: &Value) -> Result<String> {
         let nonce: [u8; 12] = rand::random();
         let data = serde_json::to_vec(&serde_json::json!({"parts":parts,"items":items}))?;

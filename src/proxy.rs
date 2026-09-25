@@ -1,9 +1,11 @@
 mod capacity;
+mod chat;
 mod fallback;
 mod gemini;
 mod guidance;
 pub(crate) mod logs;
 mod recovery;
+mod sse;
 mod websocket;
 use crate::config::{self, Config, Fingerprint, IpVersion, Mode};
 use anyhow::Result;
@@ -533,7 +535,10 @@ fn error(status: StatusCode, message: &str) -> Response {
 
 fn requested_effort<'a>(path: &str, value: &'a Value) -> Option<&'a str> {
     if path.trim_end_matches('/').ends_with("/chat/completions") {
-        value.get("reasoning_effort").and_then(Value::as_str)
+        value
+            .get("reasoning_effort")
+            .and_then(Value::as_str)
+            .or_else(|| value.pointer("/reasoning/effort").and_then(Value::as_str))
     } else {
         value.pointer("/reasoning/effort").and_then(Value::as_str)
     }
@@ -561,7 +566,7 @@ fn rewrite<'a>(
     if let Some(alias) = value
         .pointer(model_pointer)
         .and_then(Value::as_str)
-        .and_then(|model| config.aliases.iter().find(|alias| alias.from == model))
+        .and_then(|model| config.alias_for(model, path))
     {
         aliased = true;
         let effort = requested_effort(path, &value);
@@ -694,8 +699,13 @@ impl ReplayBody {
     }
 }
 
-fn route_model<'a>(config: &'a Config, model: &str, project: &mut String) -> Option<&'a str> {
-    let alias = config.aliases.iter().find(|alias| alias.from == model);
+fn route_model<'a>(
+    config: &'a Config,
+    path: &str,
+    model: &str,
+    project: &mut String,
+) -> Option<&'a str> {
+    let alias = config.alias_for(model, path);
     if let Some(key) = alias.and_then(|a| a.api_key.as_ref()) {
         *project = key.clone();
     }
@@ -709,7 +719,7 @@ fn rewrite_uri(config: &Config, uri: &axum::http::Uri, project: &mut String) -> 
         .filter(|m| !m.contains('/'))
     {
         let decoded = percent_encoding::percent_decode_str(model).decode_utf8_lossy();
-        if let Some(target) = route_model(config, &decoded, project) {
+        if let Some(target) = route_model(config, uri.path(), &decoded, project) {
             path = format!(
                 "/v1/models/{}",
                 percent_encoding::utf8_percent_encode(target, percent_encoding::NON_ALPHANUMERIC)
@@ -727,7 +737,7 @@ fn rewrite_uri(config: &Config, uri: &axum::http::Uri, project: &mut String) -> 
                         .into_owned()
                 };
                 if decode(key) == "model"
-                    && let Some(target) = route_model(config, &decode(value), project)
+                    && let Some(target) = route_model(config, uri.path(), &decode(value), project)
                 {
                     return format!(
                         "{key}={}",
@@ -819,7 +829,7 @@ async fn prepare_body(
                 let bytes = field.bytes().await?;
                 let model = std::str::from_utf8(&bytes)?;
                 *project = config.default.api_key.clone();
-                let target = route_model(config, model, project);
+                let target = route_model(config, path, model, project);
                 log.0.route(
                     log.1,
                     Some(model.into()),
@@ -888,7 +898,11 @@ async fn forward(State(service): State<Arc<Service>>, request: Request) -> Respo
     }
     let guard = logs::RequestGuard::new(service.logs.clone(), id);
     let proxy = Arc::new(snapshot);
-    let response = fallback::forward(proxy, request).await;
+    let response = if chat::is_path(request.uri().path()) && proxy.config.mode != Mode::Client {
+        chat::forward(proxy, request).await
+    } else {
+        fallback::forward(proxy, request).await
+    };
     service.logs.finish(id, response.status().as_u16());
     if response.extensions().get::<recovery::Timeout>().is_some() {
         service

@@ -6,6 +6,10 @@ OpenAI requests use the configured upstream and credential. JSON model names and
 
 Keep request compression disabled when using model overwrites or Responses-to-Gemini conversion. The optional Codex setup commands configure this setting for you.
 
+## Chat clients using Responses or Gemini
+
+The optional [custom Chat Completions adapter](custom-chat-completions.md) exposes `/v1/custom/chat/completions`, with streaming, function calls, structured output, and OpenRouter-style reasoning details. Use `/v1/custom` as the client base URL.
+
 ## Gemini through the Responses API
 
 Use `gemini/MODEL_NAME` on `/v1/responses`. The converter supports text, images, function calls and results, structured output, streaming, usage, and signed reasoning replay. Gemini's capabilities still depend on the selected model and endpoint.

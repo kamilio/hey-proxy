@@ -50,9 +50,9 @@ fn sse_bytes(event: &Value) -> Bytes {
         event
     ))
 }
-/// Linear-time byte framing preserves split UTF-8 and LF/CRLF/CR delimiters.
-/// The bound applies to complete frames too, including ignored comment fields.
-const MAX_NATIVE_FRAME: usize = 16 * 1024 * 1024;
+#[cfg(test)]
+use super::sse::MAX_FRAME as MAX_NATIVE_FRAME;
+use super::sse::SseDecoder as NativeSse;
 const MAX_NATIVE_RESPONSE: usize = 64 * 1024 * 1024;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
@@ -65,76 +65,6 @@ fn transport_error(message: &str, proxy_code: &str) -> Response {
         }})),
     )
         .into_response()
-}
-#[derive(Default)]
-struct NativeSse {
-    line: Vec<u8>,
-    data: Vec<u8>,
-    frame_bytes: usize,
-    after_cr: bool,
-    done: bool,
-}
-impl NativeSse {
-    fn dispatch(&mut self, events: &mut Vec<Value>) -> Result<()> {
-        self.frame_bytes = 0;
-        if self.data.is_empty() {
-            return Ok(());
-        }
-        self.data.pop(); // Final data-line newline.
-        if self.data.is_empty() {
-            return Ok(());
-        }
-        if self.data == b"[DONE]" {
-            self.done = true;
-        } else {
-            anyhow::ensure!(!self.done, "Gemini data arrived after [DONE]");
-            events.push(serde_json::from_slice(&self.data)?);
-        }
-        self.data.clear();
-        Ok(())
-    }
-    fn end_line(&mut self, events: &mut Vec<Value>) -> Result<()> {
-        if self.line.is_empty() {
-            self.dispatch(events)?;
-        } else {
-            // Validate ignored fields too; never repair malformed UTF-8.
-            std::str::from_utf8(&self.line)?;
-            if let Some(data) = self.line.strip_prefix(b"data:") {
-                let data = data.strip_prefix(b" ").unwrap_or(data);
-                self.data.extend_from_slice(data);
-                self.data.push(b'\n');
-            }
-            self.line.clear();
-        }
-        Ok(())
-    }
-    fn feed(&mut self, bytes: &[u8], eof: bool) -> Result<Vec<Value>> {
-        let mut events = Vec::new();
-        for &byte in bytes {
-            if self.after_cr && byte == b'\n' {
-                self.after_cr = false;
-                continue;
-            }
-            self.after_cr = byte == b'\r';
-            self.frame_bytes += 1;
-            anyhow::ensure!(
-                self.frame_bytes <= MAX_NATIVE_FRAME,
-                "Gemini SSE frame exceeds 16 MiB"
-            );
-            if matches!(byte, b'\n' | b'\r') {
-                self.end_line(&mut events)?;
-            } else {
-                self.line.push(byte);
-            }
-        }
-        if eof {
-            if !self.line.is_empty() {
-                self.end_line(&mut events)?;
-            }
-            self.dispatch(&mut events)?;
-        }
-        Ok(events)
-    }
 }
 async fn bounded_body(mut response: reqwest::Response, limit: usize) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
@@ -466,11 +396,9 @@ pub(super) async fn forward_native(
             .map(|(m, s)| (m, format!(":{s}")))
             .unwrap_or((resource, String::new()));
         let model = model.to_owned();
-        let alias = proxy
-            .config
-            .aliases
-            .iter()
-            .find(|a| a.from == model || a.from == format!("models/{model}"));
+        let alias = proxy.config.aliases.iter().find(|a| {
+            a.api_shape.is_none() && (a.from == model || a.from == format!("models/{model}"))
+        });
         if let Some(target) = alias.and_then(|a| a.to.as_deref()) {
             let Some(target) = target.strip_prefix("gemini/") else {
                 return error(
@@ -661,6 +589,7 @@ mod tests {
         let mut config = Config::test_fixture();
         config.gemini = Some(provider(&url, "bearer"));
         config.aliases = vec![crate::config::Alias {
+            api_shape: None,
             from: "test-alias".into(),
             to: Some("gemini/models/gemini-3.1-pro-preview".into()),
             reasoning: None,
