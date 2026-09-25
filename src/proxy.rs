@@ -1599,7 +1599,7 @@ mod tests {
             };
             config.retry.max_retries = 0;
             let (url, proxy_task) = serve(router(config).unwrap()).await;
-            let response = reqwest::get(url).await.unwrap();
+            let response = reqwest::get(format!("{url}/v1/test")).await.unwrap();
             assert_eq!(response.status().as_u16(), if sse { 200 } else { 500 });
             let returned = response.text().await.unwrap();
             assert!(returned.contains("\"code\":\"server_error\""));
@@ -1654,7 +1654,7 @@ mod tests {
                 recovery_timeout_ms: 0,
             };
             let (url, proxy_task) = serve(router(config).unwrap()).await;
-            let response = reqwest::get(url).await.unwrap();
+            let response = reqwest::get(format!("{url}/v1/test")).await.unwrap();
             assert_eq!(response.status().as_u16(), status);
             assert_eq!(response.headers()["x-upstream"], "retained");
             let returned = response.text().await.unwrap();
@@ -1701,7 +1701,7 @@ mod tests {
         .await;
         let client = reqwest::Client::new();
         let response = client
-            .post(&url)
+            .post(format!("{url}/v1/test"))
             .header("content-type", "application/json")
             .body("{")
             .send()
@@ -1709,7 +1709,7 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let response = client
-            .post(&url)
+            .post(format!("{url}/v1/test"))
             .body(vec![0u8; 16 * 1024 * 1024 + 1])
             .send()
             .await
@@ -1719,7 +1719,7 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         let payload = b"binary\x00upload";
         let response = client
-            .post(&url)
+            .post(format!("{url}/v1/test"))
             .header("content-type", "application/octet-stream")
             .body(payload.as_slice())
             .send()
@@ -1762,7 +1762,7 @@ mod tests {
         let (url, proxy_task) = serve(router(config).unwrap()).await;
         let client = reqwest::Client::new();
         let response = client
-            .post(&url)
+            .post(format!("{url}/v1/test"))
             .body(vec![42u8; 128 * 1024])
             .send()
             .await
@@ -1770,7 +1770,7 @@ mod tests {
         assert_eq!(response.bytes().await.unwrap(), vec![42u8; 128 * 1024]);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         let response = client
-            .get(&url)
+            .get(format!("{url}/v1/test"))
             .header("connection", "Upgrade")
             .header("upgrade", "websocket")
             .header("sec-websocket-version", "13")
@@ -2120,7 +2120,7 @@ mod tests {
             };
             config.retry.recovery_timeout_ms = 0;
             let (url, proxy_task) = serve(router(config).unwrap()).await;
-            let response = reqwest::get(&url).await.unwrap();
+            let response = reqwest::get(format!("{url}/v1/test")).await.unwrap();
             assert_eq!(response.status(), expected, "{version:?}");
             proxy_task.abort();
         }
@@ -2147,7 +2147,7 @@ mod tests {
         };
         let (url, proxy_task) = serve(router_with(config.clone(), options).unwrap()).await;
         let client = reqwest::Client::new();
-        let get = || client.get(&url).send();
+        let get = || client.get(format!("{url}/v1/test")).send();
         assert_eq!(get().await.unwrap().text().await.unwrap(), "Bearer first");
 
         // A valid edit applies to the very next request.
@@ -2209,10 +2209,13 @@ mod tests {
             .unwrap(),
         )
         .await;
-        let mut response = tokio::time::timeout(Duration::from_secs(1), reqwest::get(url))
-            .await
-            .unwrap()
-            .unwrap();
+        let mut response = tokio::time::timeout(
+            Duration::from_secs(1),
+            reqwest::get(format!("{url}/v1/test")),
+        )
+        .await
+        .unwrap()
+        .unwrap();
         assert_eq!(response.headers()["content-type"], "text/event-stream");
         let chunk = tokio::time::timeout(Duration::from_secs(1), response.chunk())
             .await

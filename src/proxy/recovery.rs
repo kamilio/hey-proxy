@@ -213,10 +213,13 @@ mod tests {
             let mut config = short_config(upstream_url);
             config.retry.recovery_timeout_ms = 70;
             let (url, proxy) = serve(router(config).unwrap()).await;
-            let response = tokio::time::timeout(Duration::from_secs(1), reqwest::get(url))
-                .await
-                .unwrap()
-                .unwrap();
+            let response = tokio::time::timeout(
+                Duration::from_secs(1),
+                reqwest::get(format!("{url}/v1/test")),
+            )
+            .await
+            .unwrap()
+            .unwrap();
             assert_eq!(response.status(), 504, "phase {phase}");
             let body: Value = response.json().await.unwrap();
             assert_eq!(body["error"]["proxy_code"], "proxy_recovery_timeout");
@@ -238,7 +241,12 @@ mod tests {
             }))
             .await;
             let (url, proxy) = serve(router(short_config(upstream_url)).unwrap()).await;
-            let result = reqwest::get(url).await.unwrap().text().await.unwrap();
+            let result = reqwest::get(format!("{url}/v1/test"))
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap();
             assert!(!result.is_empty());
             assert_eq!(calls.load(Ordering::SeqCst), 1);
             proxy.abort();
@@ -260,7 +268,12 @@ mod tests {
         let config = short_config(format!("http://{address}"));
         let (url, proxy) = serve(router(config).unwrap()).await;
         assert_eq!(
-            reqwest::get(url).await.unwrap().text().await.unwrap(),
+            reqwest::get(format!("{url}/v1/test"))
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
             "online"
         );
         proxy.abort();
