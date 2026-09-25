@@ -400,6 +400,34 @@ fn source_bundle(dir: &Path) -> Result<()> {
         ("src/access.rs", include_str!("access.rs")),
         ("src/mode_tests.rs", include_str!("mode_tests.rs")),
         ("src/proxy.rs", include_str!("proxy.rs")),
+        ("src/proxy/overview.rs", include_str!("proxy/overview.rs")),
+        (
+            "src/proxy/overview.html",
+            include_str!("proxy/overview.html"),
+        ),
+        ("src/proxy/overview.js", include_str!("proxy/overview.js")),
+        (
+            "src/proxy/overview/tests.rs",
+            include_str!("proxy/overview/tests.rs"),
+        ),
+        ("src/proxy/chat.rs", include_str!("proxy/chat.rs")),
+        (
+            "src/proxy/chat/request.rs",
+            include_str!("proxy/chat/request.rs"),
+        ),
+        (
+            "src/proxy/chat/response.rs",
+            include_str!("proxy/chat/response.rs"),
+        ),
+        (
+            "src/proxy/chat/stream.rs",
+            include_str!("proxy/chat/stream.rs"),
+        ),
+        (
+            "src/proxy/chat/tests.rs",
+            include_str!("proxy/chat/tests.rs"),
+        ),
+        ("src/proxy/sse.rs", include_str!("proxy/sse.rs")),
         ("src/proxy/capacity.rs", include_str!("proxy/capacity.rs")),
         ("src/proxy/guidance.rs", include_str!("proxy/guidance.rs")),
         ("src/proxy/recovery.rs", include_str!("proxy/recovery.rs")),
@@ -1130,6 +1158,16 @@ mod tests {
             "src/proxy/fallback.rs",
             "src/proxy/fallback/tests.rs",
             "tests/fallback_policy.rs",
+            "src/proxy/overview.rs",
+            "src/proxy/overview.html",
+            "src/proxy/overview.js",
+            "src/proxy/overview/tests.rs",
+            "src/proxy/chat.rs",
+            "src/proxy/chat/request.rs",
+            "src/proxy/chat/response.rs",
+            "src/proxy/chat/stream.rs",
+            "src/proxy/chat/tests.rs",
+            "src/proxy/sse.rs",
         ] {
             assert!(
                 dir.path().join(file).exists(),

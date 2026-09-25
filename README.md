@@ -34,7 +34,9 @@ Normal startup also creates this file if needed. Existing proxy configs are pres
 hey-proxy
 ```
 
-Point your client's base URL at **`http://127.0.0.1:8080/v1`**. Open **`http://127.0.0.1:8080/logs`** for the dashboard.
+Point your client's base URL at **`http://127.0.0.1:8080/v1`**. Open **`http://127.0.0.1:8080/`** for the API overview, or **`http://127.0.0.1:8080/logs`** for the traffic dashboard.
+
+The overview lists API routes, copyable client base URLs, and model names from your configured aliases, reasoning routes, and fallbacks. It respects API-specific overwrite rules and separates native Gemini model names from Responses model names. It never fetches an upstream model catalog. Click **Refresh config** after editing your config. Host mode uses the same access-key login as the dashboard; client relays show that model configuration belongs to their host.
 
 **Installing or running hey-proxy never changes your Codex configuration.** Codex setup is a separate, optional command.
 

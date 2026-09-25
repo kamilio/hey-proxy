@@ -4,6 +4,7 @@ mod fallback;
 mod gemini;
 mod guidance;
 pub(crate) mod logs;
+mod overview;
 mod recovery;
 mod sse;
 mod websocket;
@@ -167,6 +168,9 @@ pub fn router_with(config: Config, options: Options) -> Result<Router> {
         connectivity_probes: options.connectivity_probes,
     });
     Ok(Router::new()
+        .route("/", axum::routing::get(overview::page))
+        .route("/overview.js", axum::routing::get(overview::script))
+        .route("/overview/api", axum::routing::get(overview::data))
         .route("/logs", axum::routing::get(logs::page))
         .route("/logs/dashboard.js", axum::routing::get(logs::script))
         .route("/logs/api", axum::routing::get(logs::entries))
@@ -233,7 +237,8 @@ async fn authenticate(
     if accepted {
         return next.run(request).await;
     }
-    if !request.uri().path().starts_with("/logs") {
+    let path = request.uri().path();
+    if path != "/" && !path.starts_with("/overview") && !path.starts_with("/logs") {
         let id = service
             .logs
             .begin(request.method().as_str(), request.uri().path(), "HTTP");
@@ -242,7 +247,17 @@ async fn authenticate(
             .logs
             .complete(id, "failed", "authentication", Some("unauthorized"), 0);
     }
-    if request.uri().path() == "/logs" {
+    if path == "/" {
+        let page = LOGIN
+            .replace("Request logs", "hey-proxy overview")
+            .replace("Open logs", "Open overview")
+            .replace(
+                "<label>",
+                "<input type=\"hidden\" name=\"next\" value=\"/\"><label>",
+            );
+        return (StatusCode::UNAUTHORIZED, axum::response::Html(page)).into_response();
+    }
+    if path == "/logs" {
         return (StatusCode::UNAUTHORIZED, axum::response::Html(LOGIN)).into_response();
     }
     error(
@@ -253,6 +268,7 @@ async fn authenticate(
 #[derive(serde::Deserialize)]
 struct Login {
     api_key: String,
+    next: Option<String>,
 }
 async fn login(
     State(service): State<Arc<Service>>,
@@ -266,9 +282,14 @@ async fn login(
     if !accepted {
         return error(StatusCode::UNAUTHORIZED, "Invalid host access key");
     }
-    let mut response = axum::response::Redirect::to("/logs").into_response();
+    let next = if form.next.as_deref() == Some("/") {
+        "/"
+    } else {
+        "/logs"
+    };
+    let mut response = axum::response::Redirect::to(next).into_response();
     if let Ok(value) = header::HeaderValue::from_str(&format!(
-        "hey_proxy_access={}; HttpOnly; SameSite=Strict; Path=/logs",
+        "hey_proxy_access={}; HttpOnly; SameSite=Strict; Path=/",
         form.api_key
     )) {
         response.headers_mut().insert(header::SET_COOKIE, value);
