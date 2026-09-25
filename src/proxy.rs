@@ -539,6 +539,13 @@ fn requested_effort<'a>(path: &str, value: &'a Value) -> Option<&'a str> {
             .get("reasoning_effort")
             .and_then(Value::as_str)
             .or_else(|| value.pointer("/reasoning/effort").and_then(Value::as_str))
+            .or_else(
+                || match value.pointer("/reasoning/enabled").and_then(Value::as_bool) {
+                    Some(true) => Some("medium"),
+                    Some(false) => Some("none"),
+                    None => None,
+                },
+            )
     } else {
         value.pointer("/reasoning/effort").and_then(Value::as_str)
     }

@@ -351,6 +351,10 @@ async fn chat_custom_route_uses_chat_alias_shape_and_leaves_standard_route_uncha
         let seen = seen.clone();
         async move {
             let (parts, body) = request.into_parts();
+            if parts.uri.path() == "/v1/responses" {
+                assert_eq!(parts.headers["accept-encoding"], "identity");
+                assert!(!parts.headers.contains_key("digest"));
+            }
             let input: Value =
                 serde_json::from_slice(&axum::body::to_bytes(body, LIMIT).await.unwrap()).unwrap();
             seen.lock().unwrap().push((
@@ -370,6 +374,8 @@ async fn chat_custom_route_uses_chat_alias_shape_and_leaves_standard_route_uncha
     let client = reqwest::Client::new();
     let result = client
         .post(format!("{url}/v1/custom/chat/completions"))
+        .header("accept-encoding", "gzip, br")
+        .header("digest", "original-body-checksum")
         .json(&chat())
         .send()
         .await
@@ -630,4 +636,32 @@ async fn chat_stream_conversion_failure_is_recorded_as_failed() {
         store.recent()[0].error_code.as_deref(),
         Some("chat_stream_error")
     );
+}
+
+#[test]
+fn chat_openrouter_enabled_setting_routes_like_its_converted_effort() {
+    let config=Config {aliases:serde_json::from_value(json!([
+        {"from":"friendly","to":"base","reasoning_routes":{"medium":{"to":"thinking"},"none":{"to":"quick"}}}
+    ])).unwrap(),..Config::test_fixture()};
+    for (enabled, expected) in [(true, "thinking"), (false, "quick")] {
+        let mut input = chat();
+        input["reasoning"] = json!({"enabled":enabled});
+        let (routed, _) = rewrite(
+            &config,
+            "/v1/custom/chat/completions",
+            Bytes::from(input.to_string()),
+        )
+        .unwrap();
+        let value: Value = serde_json::from_slice(&routed).unwrap();
+        assert_eq!(value["model"], expected);
+        let converted = request::convert(&input, expected, &codec()).unwrap();
+        let (routed, _) = rewrite(
+            &config,
+            "/v1/responses",
+            Bytes::from(converted.body.to_string()),
+        )
+        .unwrap();
+        let value: Value = serde_json::from_slice(&routed).unwrap();
+        assert_eq!(value["model"], expected);
+    }
 }

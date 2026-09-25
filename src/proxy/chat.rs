@@ -21,6 +21,12 @@ pub(super) async fn forward(proxy: Arc<Proxy>, request: Request) -> Response {
             "Custom Chat Completions does not accept query parameters",
         );
     }
+    if request.headers().contains_key(header::UPGRADE) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "Custom Chat Completions supports HTTP and SSE, not WebSocket upgrades",
+        );
+    }
     if request
         .headers()
         .get(header::CONTENT_ENCODING)
@@ -74,6 +80,14 @@ pub(super) async fn forward(proxy: Arc<Proxy>, request: Request) -> Response {
     });
     parts.uri = "/v1/responses".parse().unwrap();
     parts.headers.remove(header::CONTENT_LENGTH);
+    parts.headers.remove("content-md5");
+    parts.headers.remove("digest");
+    // The proxy's HTTP client deliberately does not decompress provider bodies.
+    // This endpoint must parse the reply, even when the chat client accepts gzip.
+    parts.headers.insert(
+        header::ACCEPT_ENCODING,
+        header::HeaderValue::from_static("identity"),
+    );
     parts.headers.insert(
         header::CONTENT_TYPE,
         header::HeaderValue::from_static("application/json"),
