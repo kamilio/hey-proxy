@@ -40,6 +40,18 @@ The overview lists API routes, copyable client base URLs, and model names from y
 
 **Installing or running hey-proxy never changes your Codex configuration.** Codex setup is a separate, optional command.
 
+## Verify a request goes through hey-proxy
+
+Send exactly `hello-hey-proxy` as your entire user message. hey-proxy replies locally with `hello-dude`, without calling a model or using tokens. Earlier conversation history and system instructions are allowed; only the final message is checked. Extra whitespace, longer text, multiple content blocks, attachments, and tool results do not trigger the probe.
+
+The probe supports HTTP JSON and SSE on Responses, Chat Completions, Messages (including the custom adapters), and native Gemini generation endpoints. Host access-key authentication still applies. Responses include `x-hey-proxy-probe: true`. WebSocket requests and bodies over 64 MiB are forwarded normally. The synthetic Responses ID is not stored upstream; send conversation history rather than using it as `previous_response_id` in a later request.
+
+```sh
+curl http://127.0.0.1:8080/v1/responses \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"probe","input":"hello-hey-proxy"}'
+```
+
 ## Connect your Claude subscription
 
 Add `"claude": {}` under `providers` in your proxy config, then run `hey-proxy claude-login` and start the proxy. hey-proxy owns the OAuth tokens and refreshes them automatically; Claude Code needs only these overrides:

@@ -7,6 +7,7 @@ mod guidance;
 pub(crate) mod logs;
 mod messages;
 mod overview;
+mod probe;
 mod recovery;
 mod replay;
 mod sse;
@@ -1058,17 +1059,9 @@ async fn forward(State(service): State<Arc<Service>>, request: Request) -> Respo
     }
     let guard = logs::RequestGuard::new(service.logs.clone(), id);
     let proxy = Arc::new(snapshot);
-    let response = if claude::is_path(request.uri().path())
-        && proxy.config.mode != Mode::Client
-        && proxy.config.claude.is_some()
-    {
-        claude::forward(proxy, request).await
-    } else if chat::is_path(request.uri().path()) && proxy.config.mode != Mode::Client {
-        chat::forward(proxy, request).await
-    } else if messages::is_path(request.uri().path()) && proxy.config.mode != Mode::Client {
-        messages::forward(proxy, request).await
-    } else {
-        fallback::forward(proxy, request).await
+    let response = match probe::intercept(request).await {
+        Ok(request) => forward_api(proxy, request).await,
+        Err(response) => response,
     };
     service.logs.finish(id, response.status().as_u16());
     if response.extensions().get::<recovery::Timeout>().is_some() {
@@ -1091,6 +1084,21 @@ async fn forward(State(service): State<Arc<Service>>, request: Request) -> Respo
         .and_then(|v| v.parse().ok());
     let (parts, body) = response.into_parts();
     Response::from_parts(parts, guard.wrap(body, length, is_sse))
+}
+
+async fn forward_api(proxy: Arc<Proxy>, request: Request) -> Response {
+    if claude::is_path(request.uri().path())
+        && proxy.config.mode != Mode::Client
+        && proxy.config.claude.is_some()
+    {
+        claude::forward(proxy, request).await
+    } else if chat::is_path(request.uri().path()) && proxy.config.mode != Mode::Client {
+        chat::forward(proxy, request).await
+    } else if messages::is_path(request.uri().path()) && proxy.config.mode != Mode::Client {
+        messages::forward(proxy, request).await
+    } else {
+        fallback::forward(proxy, request).await
+    }
 }
 
 async fn forward_request(proxy: Arc<Proxy>, request: Request) -> Response {
