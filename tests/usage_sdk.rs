@@ -225,3 +225,106 @@ async fn cli_uses_local_host_key_for_config_and_lists_accounts_without_oauth_sto
     assert!(!path.with_extension("claude.json").exists());
     task.abort();
 }
+
+#[tokio::test]
+async fn cli_recommend_and_codex_usage_work_for_both_earliest_expiring_and_exhausted_states() {
+    let rec_payload = json!({
+        "schema_version": 1,
+        "recommended_provider": "codex",
+        "recommended_account": "default",
+        "reason": "earliest_expiring_window",
+        "summary": "Recommended codex: Session · 5 hours expires earliest in 30m (60.0% left) vs claude in 2h (75.0% left).",
+        "candidates": [
+            {
+                "account": {"provider": "codex", "id": "default"},
+                "state": "ok",
+                "available": true,
+                "exhausted": false,
+                "using_extra_usage": false,
+                "effective_remaining_percent": 60.0,
+                "earliest_expiring_window": {
+                    "id": "five_hour",
+                    "label": "Session · 5 hours",
+                    "used_percent": 40.0,
+                    "remaining_percent": 60.0,
+                    "resets_at": "2026-10-02T19:00:00Z",
+                    "resets_in_seconds": 1800
+                },
+                "next_reset_at": "2026-10-02T19:00:00Z",
+                "next_reset_in_seconds": 1800,
+                "error": null
+            },
+            {
+                "account": {"provider": "claude", "id": "default"},
+                "state": "ok",
+                "available": true,
+                "exhausted": false,
+                "using_extra_usage": false,
+                "effective_remaining_percent": 75.0,
+                "earliest_expiring_window": {
+                    "id": "five_hour",
+                    "label": "Session · 5 hours",
+                    "used_percent": 25.0,
+                    "remaining_percent": 75.0,
+                    "resets_at": "2026-10-02T20:30:00Z",
+                    "resets_in_seconds": 7200
+                },
+                "next_reset_at": "2026-10-02T20:30:00Z",
+                "next_reset_in_seconds": 7200,
+                "error": null
+            }
+        ]
+    });
+    let (url, task) = serve(Router::new().fallback(any(move |request: Request| {
+        let rec_payload = rec_payload.clone();
+        async move {
+            match request.uri().path() {
+                "/usage/v1/recommend" => axum::Json(rec_payload),
+                "/usage/v1/codex/default" => {
+                    let mut p = reading("ok");
+                    p["account"]["provider"] = json!("codex");
+                    axum::Json(p)
+                }
+                other => panic!("unexpected path {other}"),
+            }
+        }
+    })))
+    .await;
+
+    let out_quiet = command()
+        .args(["recommend", "--base-url", &url, "--provider-only"])
+        .output()
+        .await
+        .unwrap();
+    assert!(out_quiet.status.success());
+    assert_eq!(String::from_utf8_lossy(&out_quiet.stdout).trim(), "codex");
+
+    let out_human = command()
+        .args(["recommend", "--base-url", &url])
+        .output()
+        .await
+        .unwrap();
+    assert!(out_human.status.success());
+    let text = String::from_utf8_lossy(&out_human.stdout);
+    assert!(text.contains("Recommended: codex"));
+    assert!(text.contains("* codex/default · AVAILABLE"));
+
+    let out_usage_rec = command()
+        .args(["usage", "--recommend", "--json", "--base-url", &url])
+        .output()
+        .await
+        .unwrap();
+    assert!(out_usage_rec.status.success());
+    let parsed: Value = serde_json::from_slice(&out_usage_rec.stdout).unwrap();
+    assert_eq!(parsed["recommended_provider"], "codex");
+
+    let out_codex = command()
+        .args(["usage", "--provider", "codex", "--base-url", &url])
+        .output()
+        .await
+        .unwrap();
+    assert!(out_codex.status.success());
+    assert!(String::from_utf8_lossy(&out_codex.stdout).contains("codex/default · ok"));
+
+    task.abort();
+}

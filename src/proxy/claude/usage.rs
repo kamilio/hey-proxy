@@ -126,7 +126,17 @@ pub(in crate::proxy) async fn usage(
 
 pub(in crate::proxy) async fn reading(proxy: &Proxy) -> Value {
     let service = &proxy.service;
-    let Some(provider) = &proxy.config.claude else {
+    let default_provider;
+    let provider = if let Some(configured) = &proxy.config.claude {
+        configured
+    } else if service
+        .source
+        .as_deref()
+        .is_some_and(|p| p.with_extension("claude.json").exists())
+    {
+        default_provider = ProviderConfig::default();
+        &default_provider
+    } else {
         return json!({"state":"disabled"});
     };
     let path = match service

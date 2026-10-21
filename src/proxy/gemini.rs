@@ -86,6 +86,7 @@ pub(super) async fn send_native(
     body: &Value,
 ) -> std::result::Result<reqwest::Response, Box<Response>> {
     let mut recovery = Recovery::for_request(proxy);
+    let mut adc_refreshed = false;
     loop {
         let credentials = match credential_headers(proxy, config).await {
             Ok(v) => v,
@@ -162,6 +163,11 @@ pub(super) async fn send_native(
                 .unwrap_or("gemini_http_error");
             let normalized = ResponseError::from_native(&native, Some(status.as_u16()));
             attempt.finish("http_error", Some(status.as_u16()), Some(code));
+            if status == StatusCode::UNAUTHORIZED && config.auth == Auth::Adc && !adc_refreshed {
+                adc_refreshed = true;
+                proxy.service.credentials.invalidate_adc().await;
+                continue;
+            }
             if normalized.retryable && recovery.retry(&proxy.config, &headers).await {
                 continue;
             }
@@ -782,6 +788,9 @@ pub(super) async fn forward_native(
         }
     };
     let status = upstream.status();
+    if status == StatusCode::UNAUTHORIZED && config.auth == Auth::Adc {
+        proxy.service.credentials.invalidate_adc().await;
+    }
     let mut headers = upstream.headers().clone();
     clean_headers(&mut headers);
     let mut response = Response::new(Body::from_stream(upstream.bytes_stream()));

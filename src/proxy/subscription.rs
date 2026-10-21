@@ -1,7 +1,8 @@
 //! On-demand management API. No startup hooks, inference accounting, or model-path locks.
 use super::*;
-use hey_proxy::usage::{Account, AccountUsage, Accounts, Reading, SCHEMA_VERSION};
+use hey_proxy::usage::{Account, AccountUsage, Accounts, Reading, Recommendation, SCHEMA_VERSION};
 use serde::{Serialize, de::DeserializeOwned};
+use std::path::Path;
 
 fn reply<T: Serialize>(value: T) -> Response {
     ([(header::CACHE_CONTROL, "no-store")], axum::Json(value)).into_response()
@@ -15,6 +16,23 @@ fn failure(status: StatusCode, code: &str, message: &str) -> Response {
         .into_response()
 }
 
+pub(crate) fn configured_accounts(config: &Config, source: Option<&Path>) -> Vec<Account> {
+    let mut list = Vec::new();
+    if claude::is_enabled(config, source) {
+        list.push(Account {
+            provider: "claude".into(),
+            id: "default".into(),
+        });
+    }
+    if codex::is_enabled(config, source) {
+        list.push(Account {
+            provider: "codex".into(),
+            id: "default".into(),
+        });
+    }
+    list
+}
+
 pub(super) async fn accounts(State(service): State<Arc<Service>>) -> Response {
     let proxy = service.snapshot();
     if proxy.config.mode == Mode::Client {
@@ -22,17 +40,53 @@ pub(super) async fn accounts(State(service): State<Arc<Service>>) -> Response {
     }
     reply(Accounts {
         schema_version: SCHEMA_VERSION,
-        accounts: proxy
-            .config
-            .claude
-            .as_ref()
-            .map(|_| Account {
-                provider: "claude".into(),
-                id: "default".into(),
-            })
-            .into_iter()
-            .collect(),
+        accounts: configured_accounts(&proxy.config, proxy.service.source.as_deref()),
     })
+}
+
+pub(crate) async fn account_usage(
+    proxy: &Proxy,
+    provider: &str,
+    account: &str,
+) -> std::result::Result<AccountUsage, (StatusCode, &'static str, &'static str)> {
+    if !matches!(provider, "claude" | "codex") {
+        return Err((
+            StatusCode::NOT_IMPLEMENTED,
+            "unsupported_provider",
+            "Subscription usage is not implemented for this provider",
+        ));
+    }
+    if account != "default" {
+        return Err((
+            StatusCode::NOT_FOUND,
+            "unknown_account",
+            "Unknown subscription account",
+        ));
+    }
+    let raw = match provider {
+        "claude" => claude::reading(proxy).await,
+        "codex" => codex::reading(proxy).await,
+        _ => unreachable!(),
+    };
+    let reading: Reading = serde_json::from_value(raw).map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "invalid_reading",
+            "Cannot normalize subscription usage",
+        )
+    })?;
+    let usage = AccountUsage {
+        schema_version: SCHEMA_VERSION,
+        account: Account {
+            provider: provider.to_owned(),
+            id: account.to_owned(),
+        },
+        reading,
+    };
+    if let Some(tracker) = crate::spend::global_tracker(proxy.service.source.as_deref()) {
+        tracker.record_subscription(&usage);
+    }
+    Ok(usage)
 }
 
 pub(super) async fn usage(
@@ -57,38 +111,48 @@ pub(super) async fn usage(
     if proxy.config.mode == Mode::Client {
         return relay::<AccountUsage>(&proxy, &format!("/usage/v1/{provider}/{account}")).await;
     }
-    if provider != "claude" {
-        return failure(
-            StatusCode::NOT_IMPLEMENTED,
-            "unsupported_provider",
-            "Subscription usage is not implemented for this provider",
-        );
+    match account_usage(&proxy, &provider, &account).await {
+        Ok(usage) => reply(usage),
+        Err((status, code, message)) => failure(status, code, message),
     }
-    if account != "default" {
-        return failure(
-            StatusCode::NOT_FOUND,
-            "unknown_account",
-            "Unknown subscription account",
-        );
-    }
-    let reading: Reading = match serde_json::from_value(claude::reading(&proxy).await) {
-        Ok(reading) => reading,
-        Err(_) => {
-            return failure(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "invalid_reading",
-                "Cannot normalize subscription usage",
-            );
-        }
-    };
-    reply(AccountUsage {
-        schema_version: SCHEMA_VERSION,
-        account: Account {
-            provider,
-            id: account,
+}
+
+pub(crate) async fn evaluate_recommendation(proxy: &Proxy) -> Recommendation {
+    let source = proxy.service.source.as_deref();
+    let claude_enabled = claude::is_enabled(&proxy.config, source);
+    let codex_enabled = codex::is_enabled(&proxy.config, source);
+    let (claude_res, codex_res) = tokio::join!(
+        async {
+            if claude_enabled {
+                account_usage(proxy, "claude", "default").await.ok()
+            } else {
+                None
+            }
         },
-        reading,
-    })
+        async {
+            if codex_enabled {
+                account_usage(proxy, "codex", "default").await.ok()
+            } else {
+                None
+            }
+        }
+    );
+    let mut usages = Vec::new();
+    if let Some(u) = claude_res {
+        usages.push(u);
+    }
+    if let Some(u) = codex_res {
+        usages.push(u);
+    }
+    hey_proxy::usage::recommend(&usages, crate::claude_auth::now())
+}
+
+pub(super) async fn recommend(State(service): State<Arc<Service>>) -> Response {
+    let proxy = service.snapshot();
+    if proxy.config.mode == Mode::Client {
+        return relay::<Recommendation>(&proxy, "/usage/v1/recommend").await;
+    }
+    reply(evaluate_recommendation(&proxy).await)
 }
 
 // Independent of inference forwarding: no retries, body inspection or request-log writes.
@@ -147,6 +211,37 @@ async fn relay<T: DeserializeOwned + Serialize>(proxy: &Proxy, path: &str) -> Re
             StatusCode::BAD_GATEWAY,
             "host_usage_unavailable",
             "Host usage unavailable; check the host connection and access key",
+        ),
+    }
+}
+
+pub(super) async fn spend(
+    State(service): State<Arc<Service>>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let proxy = service.snapshot();
+    let db_path = crate::spend::default_db_path(proxy.service.source.as_deref());
+    let days = params
+        .get("days")
+        .and_then(|d| d.parse::<i64>().ok())
+        .filter(|d| *d > 0);
+    let since_ms = days.map(|d| crate::spend::now_ms() - d * 86_400 * 1000);
+    let label = days
+        .map(|d| format!("Last {d}d"))
+        .unwrap_or_else(|| "All time".to_string());
+    let _ = crate::spend::sync_local_sources(&db_path, since_ms);
+    let mut live_usages = Vec::new();
+    for prov in ["codex", "claude"] {
+        if let Ok(u) = account_usage(&proxy, prov, "default").await {
+            live_usages.push(u);
+        }
+    }
+    match crate::spend::generate_spend_report(&db_path, since_ms, &label, &live_usages) {
+        Ok(report) => reply(report),
+        Err(err) => failure(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "spend_report_failed",
+            &err.to_string(),
         ),
     }
 }

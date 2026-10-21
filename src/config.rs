@@ -14,6 +14,9 @@ use std::{
 #[derive(Clone, Deserialize)]
 #[serde(try_from = "ConfigFile")]
 pub struct Config {
+    /// Return local allow decisions for recognized Codex and Claude approval calls.
+    #[serde(default)]
+    pub auto_approve: bool,
     pub model_registry: Option<crate::model_registry::ModelRegistry>,
     pub fallbacks: hey_proxy::fallback::Fallbacks,
     #[serde(default)]
@@ -30,6 +33,7 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gemini: Option<hey_proxy::gemini::ProviderConfig>,
     pub claude: Option<crate::proxy::claude::ProviderConfig>,
+    pub codex: Option<crate::proxy::codex::ProviderConfig>,
     #[serde(default)]
     pub default: DefaultRoute,
     #[serde(default = "default_credential_cache_seconds")]
@@ -52,6 +56,8 @@ pub struct Config {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ConfigFile {
+    #[serde(default)]
+    auto_approve: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     model_registry: Option<crate::model_registry::ModelRegistry>,
     #[serde(default)]
@@ -96,6 +102,8 @@ struct Providers {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     claude: Option<crate::proxy::claude::ProviderConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    codex: Option<crate::proxy::codex::ProviderConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     openai: Option<OpenAiProvider>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     gemini: Option<hey_proxy::gemini::ProviderConfig>,
@@ -134,6 +142,7 @@ impl TryFrom<ConfigFile> for Config {
             file.gemini = Some(gemini);
         }
         Ok(Self {
+            auto_approve: file.auto_approve,
             model_registry: file.model_registry,
             fallbacks: file.fallbacks,
             ssh_hosts: file.ssh_hosts,
@@ -144,6 +153,7 @@ impl TryFrom<ConfigFile> for Config {
             api_keys: file.api_keys,
             gemini: file.gemini,
             claude: file.providers.claude,
+            codex: file.providers.codex,
             default: file.default,
             credential_cache_seconds: file.credential_cache_seconds,
             aliases: file.aliases,
@@ -171,9 +181,11 @@ impl Serialize for Config {
                 }),
                 gemini: self.gemini.clone(),
                 claude: self.claude.clone(),
+                codex: self.codex.clone(),
             }
         };
         let mut value = serde_json::json!({"mode":self.mode,"listen":self.listen,"aliases":self.aliases,"retry":self.retry,"logging":self.logging,"ip_version":self.ip_version,"skip_blocked_security_work":self.skip_blocked_security_work});
+        value["auto_approve"] = serde_json::json!(self.auto_approve);
         if self.mode != Mode::Client {
             if !self.fallbacks.is_empty() {
                 value["fallbacks"] =
@@ -401,10 +413,12 @@ impl Default for Retry {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            auto_approve: false,
             model_registry: None,
             fallbacks: BTreeMap::new(),
             gemini: None,
             claude: None,
+            codex: None,
             credential_cache_seconds: 2400,
             ssh_hosts: Vec::new(),
             mode: Mode::Standalone,
@@ -530,6 +544,7 @@ impl Config {
                 || !self.fallbacks.is_empty()
                 || self.gemini.is_some()
                 || self.claude.is_some()
+                || self.codex.is_some()
             {
                 bail!(
                     "Client config must not contain upstream API keys, aliases or fallback rules"
@@ -629,6 +644,9 @@ impl Config {
         }
         if let Some(claude) = &self.claude {
             claude.validate(self.mode)?;
+        }
+        if let Some(codex) = &self.codex {
+            codex.validate(self.mode)?;
         }
         if let Some(gemini) = &self.gemini {
             gemini.validate()?;

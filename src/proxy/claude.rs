@@ -11,6 +11,10 @@ pub(super) use usage::{reading, usage};
 
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 
+fn default_routing() -> bool {
+    true
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ProviderConfig {
@@ -18,6 +22,9 @@ pub(crate) struct ProviderConfig {
     /// Proxy-owned encrypted OAuth store. Relative paths resolve beside the config.
     pub credentials_file: Option<PathBuf>,
     pub usage_cache_seconds: u64,
+    /// Whether /v1/messages routes through this subscription; false keeps it usage/recommender-only.
+    #[serde(default = "default_routing")]
+    pub routing: bool,
 }
 impl Default for ProviderConfig {
     fn default() -> Self {
@@ -25,6 +32,7 @@ impl Default for ProviderConfig {
             upstream_url: "https://api.anthropic.com".into(),
             credentials_file: None,
             usage_cache_seconds: 60,
+            routing: true,
         }
     }
 }
@@ -93,6 +101,13 @@ pub(super) struct ClaudeState {
     tokens: crate::claude_auth::TokenManager,
     paths: paths::Cache,
     usage: tokio::sync::Mutex<usage::Cache>,
+}
+
+pub(super) fn is_enabled(config: &Config, source: Option<&Path>) -> bool {
+    config.claude.is_some()
+        || source
+            .map(|p| p.with_extension("claude.json").exists())
+            .unwrap_or(false)
 }
 
 pub(super) fn is_path(path: &str) -> bool {

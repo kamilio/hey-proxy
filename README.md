@@ -64,20 +64,38 @@ claude
 
 Open **http://127.0.0.1:8080/apis** for session/weekly subscription limits, reset times, usage freshness, and provider-reported extra spend. The native `/v1/messages` route preserves Claude requests and streaming responses. [Setup, credential ownership, and research sources](docs/claude-subscription.md).
 
-## Check remaining subscription usage
+## Connect your Codex subscription and recommend a provider
+
+Sign in with your ChatGPT / Codex subscription (never modifies `~/.codex/auth.json` or proxy model routing):
 
 ```sh
-hey-proxy usage                         # Claude/default: quota left and extra spend
-hey-proxy usage --json                  # Versioned, machine-readable reading
-hey-proxy usage --accounts              # Configured provider/account aliases
-hey-proxy usage --provider claude --account default
+hey-proxy codex-login                   # Browser OAuth PKCE login (localhost:1455/1457)
+hey-proxy codex-login --device-code     # Headless device-code login
+hey-proxy codex-login --import-codex-home # Import existing ~/.codex/auth.json into encrypted store
 ```
 
-The CLI queries the running proxy at the address in `--config`. Host mode reads its local proxy access key; client mode queries its connected host through the local relay. To query another proxy, use `--base-url https://your-proxy` and set `HEY_PROXY_TOKEN` to that proxy's access key. The `/v1` client base URL is also accepted. Subscription OAuth tokens stay on the proxy host.
+## Check remaining subscription usage and smart recommendation
+
+```sh
+hey-proxy recommend                     # Smart recommendation: earliest expiring quota (codex or claude)
+hey-proxy recommend -q                  # Print only the recommended provider ID (codex or claude)
+hey-proxy recommend --json              # Full candidate rankings, reset countdowns, and reason code
+hey-proxy usage --recommend             # Equivalent flag on the usage subcommand
+hey-proxy usage --provider codex        # Codex/default: quota left and extra spend/credits
+hey-proxy usage --provider claude       # Claude/default: quota left and extra spend
+hey-proxy usage --json                  # Versioned, machine-readable reading
+hey-proxy usage --accounts              # Configured provider/account aliases
+```
+
+The recommender evaluates both `codex` and `claude` subscription quotas without altering proxy model routing:
+- If a provider is completely out of quota (`0%` remaining on either its 5-hour session or 7-day weekly window), it is skipped so you only use an available provider.
+- When both providers have remaining quota, it recommends whichever provider's active quota window is **expiring earliest** (use-it-before-reset), breaking ties by higher effective remaining headroom.
+
+The CLI queries the running proxy at the address in `--config` (falling back to local in-process evaluation when the daemon is not running). Host mode reads its local proxy access key; client mode queries its connected host through the local relay. To query another proxy, use `--base-url https://your-proxy` and set `HEY_PROXY_TOKEN` to that proxy's access key. The `/v1` client base URL is also accepted. Subscription OAuth tokens stay on the proxy host.
 
 Remaining percentages and reset times are account-wide, including usage outside this proxy. Extra spend shows the provider-reported monthly amount, cap, remaining budget, and amount above that cap. It is separate from the dashboard's estimated API-equivalent spend. Unknown values remain unknown; cached and stale readings retain their timestamps. CLI exit status is nonzero when the reading is stale, disabled, or unavailable; `--json` still prints that reading when the server returns one.
 
-The Rust SDK is available as `hey_proxy::usage::Client`, with typed provider/account readings and `accounts()` / `usage(provider, account)` methods. [CLI, SDK, and API details](docs/claude-subscription.md#cli-and-rust-sdk). Only `claude/default` is currently supported; the versioned contract is ready for future Codex accounts.
+The Rust SDK is available as `hey_proxy::usage::Client`, with typed provider/account readings and `accounts()`, `usage(provider, account)`, and `recommend()` methods. [CLI, SDK, and API details](docs/claude-subscription.md#cli-and-rust-sdk).
 
 ## Connect OpenAI
 

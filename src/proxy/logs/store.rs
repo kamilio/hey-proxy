@@ -91,6 +91,7 @@ pub struct Store {
     pub(super) remote: Mutex<std::collections::BTreeMap<Option<u64>, super::RemoteCache>>,
     pub(super) window: Mutex<super::WindowCache>,
     pub database: Option<Arc<Database>>,
+    pub spend: Option<Arc<crate::spend::SpendTracker>>,
     pub(super) dashboard: tokio::sync::Mutex<super::dashboard::Cache>,
     session_id: String,
     mode: String,
@@ -106,6 +107,7 @@ impl Default for Store {
             remote: Mutex::default(),
             window: Mutex::default(),
             database: None,
+            spend: None,
             dashboard: tokio::sync::Mutex::default(),
             session_id: format!("{:032x}", rand::random::<u128>()),
             mode: "standalone".into(),
@@ -129,6 +131,10 @@ impl Store {
     }
     pub fn open(config: &Config, config_path: &std::path::Path) -> anyhow::Result<Self> {
         let mut store = Self::memory(config);
+        let spend_dir = config_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        store.spend = crate::spend::SpendTracker::open(spend_dir.join("spend.sqlite3")).ok();
         if config.logging.enabled {
             let directory = config_path
                 .parent()
@@ -200,6 +206,11 @@ impl Store {
             .collect()
     }
     fn persist(&self, entry: &Entry, kind: &str, mut details: Value) {
+        if matches!(kind, "usage" | "finished")
+            && let Some(spend) = &self.spend
+        {
+            spend.record_entry(entry);
+        }
         let Some(database) = &self.database else {
             return;
         };

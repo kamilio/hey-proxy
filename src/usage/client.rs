@@ -1,4 +1,4 @@
-use super::{AccountUsage, Accounts, SCHEMA_VERSION};
+use super::{AccountUsage, Accounts, Recommendation, SCHEMA_VERSION};
 use reqwest::{Url, header::HeaderValue};
 use serde::de::DeserializeOwned;
 use std::{fmt, time::Duration};
@@ -7,8 +7,8 @@ use std::{fmt, time::Duration};
 pub enum Error {
     InvalidBaseUrl,
     InvalidIdentifier,
-    InvalidToken,
     InvalidTimeout,
+    InvalidToken,
     Transport,
     Http(u16),
     ResponseTooLarge,
@@ -18,18 +18,23 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidBaseUrl => f.write_str("Use a proxy HTTP(S) root URL or /v1 URL without credentials, query or fragment"),
-            Self::InvalidIdentifier => f.write_str("Provider and account IDs must be 1–128 ASCII letters, digits, underscores or hyphens"),
-            Self::InvalidToken => f.write_str("Invalid proxy access token"),
-            Self::InvalidTimeout => f.write_str("Usage timeout must be greater than zero"),
-            Self::Transport => f.write_str("Cannot reach proxy usage API (connection failure or timeout)"),
-            Self::Http(401 | 403) => f.write_str("Proxy access rejected; supply a valid proxy access token"),
-            Self::Http(404) => f.write_str("Usage account or endpoint not found; check the account ID and proxy version"),
-            Self::Http(501) => f.write_str("Subscription usage is not implemented for this provider"),
-            Self::Http(status) => write!(f, "Proxy usage API returned HTTP {status}"),
-            Self::ResponseTooLarge => f.write_str("Proxy usage response exceeds 1 MiB"),
-            Self::InvalidResponse => f.write_str("Invalid proxy usage response"),
-            Self::UnsupportedSchema(version) => write!(f, "Unsupported usage schema version {version}"),
+            Self::InvalidBaseUrl => write!(
+                f,
+                "Base URL must be an HTTP(S) proxy root or /v1 URL without credentials or query"
+            ),
+            Self::InvalidIdentifier => write!(
+                f,
+                "Provider and account IDs must be 1..128 ASCII letters, digits, '-' or '_'"
+            ),
+            Self::InvalidTimeout => write!(f, "Timeout must be greater than zero"),
+            Self::InvalidToken => write!(f, "Access token cannot be used as an HTTP Bearer header"),
+            Self::Transport => write!(f, "Cannot reach hey-proxy usage endpoint"),
+            Self::Http(status) => write!(f, "Proxy usage endpoint returned HTTP {status}"),
+            Self::ResponseTooLarge => write!(f, "Proxy usage response exceeded 1 MiB"),
+            Self::InvalidResponse => write!(f, "Invalid proxy usage response"),
+            Self::UnsupportedSchema(version) => {
+                write!(f, "Unsupported usage schema version {version}")
+            }
         }
     }
 }
@@ -103,6 +108,13 @@ impl Client {
     /// List configured account aliases without fetching provider usage or resolving OAuth.
     pub async fn accounts(&self) -> Result<Accounts, Error> {
         let result: Accounts = self.get("usage/v1/accounts").await?;
+        check_version(result.schema_version)?;
+        Ok(result)
+    }
+
+    /// Recommend the best subscription provider (`codex` or `claude`) based on earliest expiring usage and remaining quota.
+    pub async fn recommend(&self) -> Result<Recommendation, Error> {
+        let result: Recommendation = self.get("usage/v1/recommend").await?;
         check_version(result.schema_version)?;
         Ok(result)
     }

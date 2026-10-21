@@ -1,7 +1,6 @@
-//! Subscription quota SDK. Queries hey-proxy, never a provider credential store.
+//! Subscription quota and provider recommendation SDK. Queries hey-proxy, never a provider credential store.
 //!
-//! Provider and account IDs are proxy-local aliases. Currently only `claude/default`
-//! is implemented; future providers (including Codex) can use the same contract.
+//! Provider and account IDs are proxy-local aliases (`claude/default`, `codex/default`).
 //! Readings are account-wide, may be cached or stale, and are not token budgets.
 //!
 //! ```no_run
@@ -22,10 +21,14 @@
 //!         }
 //!     }
 //! }
+//! let recommendation = client.recommend().await?;
+//! println!("Recommended provider: {:?}", recommendation.recommended_provider);
 //! # Ok(()) }
 //! ```
 mod client;
+mod recommend;
 pub use client::{Client, Error};
+pub use recommend::{format_duration_short, format_unix_iso8601, parse_timestamp, recommend};
 use serde::{Deserialize, Serialize};
 
 pub const SCHEMA_VERSION: u32 = 1;
@@ -102,7 +105,7 @@ pub struct ExtraUsage {
 /// Provider-reported extra usage, separate from the dashboard's API-equivalent estimate.
 /// Amounts use major currency units (e.g. USD dollars). A missing cap is unknown,
 /// not unlimited. Remaining is cap headroom, not a prepaid balance or credit limit.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpendLimit {
     pub currency: String,
     pub period: String,
@@ -112,4 +115,38 @@ pub struct SpendLimit {
     pub over_limit: Option<f64>,
     /// Unknown unless explicitly supplied by the provider; never inferred from quota resets.
     pub resets_at: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExpiringWindow {
+    pub id: String,
+    pub label: String,
+    pub used_percent: Option<f64>,
+    pub remaining_percent: Option<f64>,
+    pub resets_at: Option<String>,
+    pub resets_in_seconds: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RecommendationCandidate {
+    pub account: Account,
+    pub state: State,
+    pub available: bool,
+    pub exhausted: bool,
+    pub using_extra_usage: bool,
+    pub effective_remaining_percent: Option<f64>,
+    pub earliest_expiring_window: Option<ExpiringWindow>,
+    pub next_reset_at: Option<String>,
+    pub next_reset_in_seconds: Option<u64>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Recommendation {
+    pub schema_version: u32,
+    pub recommended_provider: Option<String>,
+    pub recommended_account: Option<String>,
+    pub reason: String,
+    pub summary: String,
+    pub candidates: Vec<RecommendationCandidate>,
 }

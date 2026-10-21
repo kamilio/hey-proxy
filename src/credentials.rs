@@ -2,12 +2,14 @@
 //! request bodies. Shell and 1Password sources share a bounded asynchronous single-flight cache.
 use anyhow::{Result, anyhow, bail};
 use reqwest::header::{HeaderMap, HeaderValue};
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::{
-    io::AsyncReadExt,
-    sync::{Mutex, OnceCell},
-    time::Instant,
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Duration, SystemTime},
 };
+use tokio::{io::AsyncReadExt, sync::Mutex, time::Instant};
+
+const ADC_MAX_WALL_AGE: Duration = Duration::from_secs(2400);
 
 // Each trusted shell command owns a process group. Cancellation/timeout must
 // also terminate helpers that inherited its stdout, not only /bin/sh itself.
@@ -25,14 +27,14 @@ impl Drop for CommandGroup {
 
 #[derive(Default)]
 struct ShellState {
-    value: Option<(Instant, HeaderValue)>,
+    value: Option<(Instant, SystemTime, HeaderValue)>,
     failed: Option<(Instant, String)>,
 }
 type ShellCell = Arc<Mutex<ShellState>>;
 #[derive(Default)]
 pub struct CredentialResolver {
     shell: Mutex<HashMap<String, ShellCell>>,
-    adc: OnceCell<google_cloud_auth::credentials::Credentials>,
+    adc: Mutex<Option<(SystemTime, google_cloud_auth::credentials::Credentials)>>,
     op_cli: Option<std::path::PathBuf>,
 }
 pub fn validate_source(source: &str) -> Result<()> {
@@ -129,8 +131,11 @@ impl CredentialResolver {
             entries.entry(source.to_owned()).or_default().clone()
         };
         let mut cached = cell.lock().await;
-        if let Some((when, value)) = &cached.value
+        if let Some((when, wall, value)) = &cached.value
             && when.elapsed() < ttl
+            && SystemTime::now()
+                .duration_since(*wall)
+                .is_ok_and(|age| age < ttl)
         {
             return Ok(value.clone());
         }
@@ -200,22 +205,36 @@ impl CredentialResolver {
                 return Err(error);
             }
         };
-        cached.value = Some((Instant::now(), value.clone()));
+        cached.value = Some((Instant::now(), SystemTime::now(), value.clone()));
         cached.failed = None;
         Ok(value)
     }
+    pub async fn invalidate_adc(&self) {
+        *self.adc.lock().await = None;
+    }
     /// The official Google Rust SDK handles ADC discovery, federation,
     /// impersonation, refresh and token caching. No gcloud subprocess per request.
+    /// Rebuild cached credentials on a wall-clock TTL so system sleep (which pauses
+    /// `Instant` on macOS) cannot leave an expired 1-hour OAuth2 token in cache.
     pub async fn adc_headers(&self) -> Result<HeaderMap> {
         use google_cloud_auth::credentials::{Builder, CacheableResource};
-        let credentials = self
-            .adc
-            .get_or_try_init(|| async {
+        let credentials = {
+            let mut guard = self.adc.lock().await;
+            let cached = guard.as_ref().and_then(|(created_at, credentials)| {
+                SystemTime::now()
+                    .duration_since(*created_at)
+                    .ok()
+                    .filter(|age| *age < ADC_MAX_WALL_AGE)
+                    .map(|_| credentials.clone())
+            });
+            if let Some(credentials) = cached {
+                credentials
+            } else {
                 // The Google SDK uses reqwest's rustls-no-provider transport.
                 // Keep an existing process provider, or install our ring provider
                 // before the SDK constructs its HTTPS client.
                 let _ = rustls::crypto::ring::default_provider().install_default();
-                tokio::task::spawn_blocking(|| {
+                let built = tokio::task::spawn_blocking(|| {
                     Builder::default()
                         .with_scopes(["https://www.googleapis.com/auth/cloud-platform"])
                         .build()
@@ -226,24 +245,33 @@ impl CredentialResolver {
                     anyhow!(
                         "ADC credentials unavailable; configure Application Default Credentials"
                     )
-                })
-            })
-            .await?;
+                })?;
+                *guard = Some((SystemTime::now(), built.clone()));
+                built
+            }
+        };
         match tokio::time::timeout(
             Duration::from_secs(30),
             credentials.headers(Default::default()),
         )
         .await
-        .map_err(|_| anyhow!("ADC token acquisition timed out"))?
-        .map_err(|_| anyhow!("ADC token acquisition failed"))?
+        .map_err(|_| anyhow!("ADC token acquisition timed out"))
+        .and_then(|result| result.map_err(|_| anyhow!("ADC token acquisition failed")))
         {
-            CacheableResource::New { mut data, .. } => {
+            Ok(CacheableResource::New { mut data, .. }) => {
                 for (_, value) in data.iter_mut() {
                     value.set_sensitive(true);
                 }
                 Ok(data)
             }
-            CacheableResource::NotModified => bail!("ADC returned no credential headers"),
+            Ok(CacheableResource::NotModified) => {
+                self.invalidate_adc().await;
+                bail!("ADC returned no credential headers")
+            }
+            Err(error) => {
+                self.invalidate_adc().await;
+                Err(error)
+            }
         }
     }
 }
@@ -259,7 +287,11 @@ mod tests {
             let mut entries = resolver.shell.lock().await;
             for i in 0..128 {
                 let cell = Arc::new(Mutex::new(ShellState {
-                    value: Some((Instant::now(), HeaderValue::from_static("cached"))),
+                    value: Some((
+                        Instant::now(),
+                        SystemTime::now(),
+                        HeaderValue::from_static("cached"),
+                    )),
                     failed: None,
                 }));
                 entries.insert(format!("sh://printf {i}"), cell.clone());

@@ -206,6 +206,13 @@ async fn host_client_forwarding_authentication_and_connection_verification() {
         Some(&keys.local),
     )
     .unwrap();
+    rollout::configure_gemini_authenticated(
+        &format!("{host_url}/v1"),
+        "gemini/gemini-2.5-pro",
+        Some(&host_home),
+        Some(&keys.local),
+    )
+    .unwrap();
     rollout::verify(&host, &key_path, Some(&host_home), true)
         .await
         .unwrap();
@@ -214,6 +221,13 @@ async fn host_client_forwarding_authentication_and_connection_verification() {
         &format!("{relay_url}/v1"),
         Some(&relay_home),
         None,
+        None,
+    )
+    .unwrap();
+    rollout::configure_gemini_authenticated(
+        &format!("{relay_url}/v1"),
+        "gemini/gemini-2.5-pro",
+        Some(&relay_home),
         None,
     )
     .unwrap();

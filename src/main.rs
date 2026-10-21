@@ -1,5 +1,6 @@
 mod access;
 mod claude_auth;
+mod codex_auth;
 mod config;
 mod gemini_cli;
 #[cfg(test)]
@@ -7,6 +8,7 @@ mod mode_tests;
 mod model_registry;
 mod proxy;
 mod rollout;
+mod spend;
 mod usage_cli;
 
 use anyhow::{Context, Result};
@@ -33,6 +35,10 @@ struct Args {
 enum Command {
     /// Check remaining subscription quota and provider-reported extra spend
     Usage(usage_cli::Args),
+    /// Recommend the best subscription provider (codex or claude) based on earliest expiring usage and remaining quota
+    Recommend(usage_cli::RecommendArgs),
+    /// Monitor API-equivalent spend across providers and models and estimate subscription yield
+    Spend(usage_cli::SpendArgs),
     /// Install/update the proxy and sync its config on SSH hosts
     Rollout {
         /// Only deploy these configured hosts (repeatable)
@@ -46,6 +52,18 @@ enum Command {
         /// Print the authorization URL without opening a browser
         #[arg(long)]
         no_browser: bool,
+    },
+    /// Sign in with a Codex (ChatGPT) subscription and store proxy-owned OAuth credentials
+    CodexLogin {
+        /// Print the authorization URL without opening a browser
+        #[arg(long)]
+        no_browser: bool,
+        /// Sign in using a one-time device code instead of a localhost browser callback
+        #[arg(long)]
+        device_code: bool,
+        /// Import existing OAuth credentials from CODEX_HOME (~/.codex/auth.json) into hey-proxy
+        #[arg(long)]
+        import_codex_home: bool,
     },
     /// Encrypt literal API keys in this config using a private local key file
     EncryptConfig,
@@ -86,6 +104,9 @@ enum Command {
         model: String,
         #[arg(long)]
         codex_home: Option<PathBuf>,
+        /// Read generated local host credentials from this proxy config
+        #[arg(long)]
+        proxy_config: Option<PathBuf>,
     },
     /// Configure the current user's Pi with this proxy's providers and models
     ConfigurePi,
@@ -116,13 +137,35 @@ async fn main() -> Result<()> {
     if let Some(Command::Usage(usage)) = args.command {
         return usage_cli::run(usage, args.config).await;
     }
+    if let Some(Command::Recommend(recommend)) = args.command {
+        return usage_cli::run_recommend(recommend, args.config).await;
+    }
+    if let Some(Command::Spend(spend_args)) = args.command {
+        return usage_cli::run_spend(spend_args, args.config).await;
+    }
     if let Some(Command::ConfigureGemini {
         base_url,
         model,
         codex_home,
+        proxy_config,
     }) = &args.command
     {
-        return rollout::configure_gemini(base_url, model, codex_home.as_deref());
+        let token = if let Some(path) = proxy_config {
+            let config = config::load(path)?;
+            if config.mode == config::Mode::Host {
+                Some(access::ensure(path, &[])?.local)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        return rollout::configure_gemini_authenticated(
+            base_url,
+            model,
+            codex_home.as_deref(),
+            token.as_deref(),
+        );
     }
     if let Some(Command::ConfigureCodex {
         base_url,
@@ -182,6 +225,23 @@ async fn main() -> Result<()> {
     if let Some(Command::ClaudeLogin { no_browser }) = &args.command {
         return claude_auth::login(&config, &path, *no_browser).await;
     }
+    if let Some(Command::CodexLogin {
+        no_browser,
+        device_code,
+        import_codex_home,
+    }) = &args.command
+    {
+        return codex_auth::login(
+            &config,
+            &path,
+            codex_auth::LoginOptions {
+                no_browser: *no_browser,
+                device_code: *device_code,
+                import_codex_home: *import_codex_home,
+            },
+        )
+        .await;
+    }
     if matches!(args.command, Some(Command::EncryptConfig)) {
         config::protect(&path)?;
         println!("Config credentials encrypted");
@@ -201,6 +261,15 @@ async fn main() -> Result<()> {
                 .token(
                     &provider.credentials_path(Some(&path))?,
                     &proxy::build_client(&config)?,
+                )
+                .await?;
+        }
+        if let Some(provider) = &config.codex {
+            codex_auth::TokenManager::default()
+                .token(
+                    &provider.credentials_path(Some(&path))?,
+                    &proxy::build_client(&config)?,
+                    &provider.token_url(),
                 )
                 .await?;
         }
@@ -241,6 +310,18 @@ async fn main() -> Result<()> {
     if config.mode == config::Mode::Host {
         access::ensure(&path, &[])?;
     }
+    #[cfg(target_os = "macos")]
+    let mut keep_awake = if config.mode == config::Mode::Host {
+        std::process::Command::new("/usr/bin/caffeinate")
+            .args(["-i", "-s", "-w", &std::process::id().to_string()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .ok()
+    } else {
+        None
+    };
     let logs = std::sync::Arc::new(proxy::logs::Store::open(&config, &path)?);
     let options = proxy::Options {
         logs: Some(logs.clone()),
@@ -268,5 +349,10 @@ async fn main() -> Result<()> {
         })
         .await?;
     logs.flush().await?;
+    #[cfg(target_os = "macos")]
+    if let Some(mut child) = keep_awake.take() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
     Ok(())
 }

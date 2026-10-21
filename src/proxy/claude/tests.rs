@@ -421,7 +421,11 @@ async fn usage_requires_host_auth_and_client_relay_uses_host_credentials() {
         Some(88.0)
     );
     assert_eq!(
-        sdk.usage("codex", "default").await.unwrap_err(),
+        sdk.usage("codex", "default").await.unwrap().reading.state,
+        hey_proxy::usage::State::Disabled
+    );
+    assert_eq!(
+        sdk.usage("unsupported", "default").await.unwrap_err(),
         hey_proxy::usage::Error::Http(501)
     );
     assert_eq!(
@@ -513,7 +517,16 @@ async fn sdk_usage_shares_cache_and_preserves_provider_backoff() {
     );
     assert_eq!(count.load(Ordering::SeqCst), 2);
     assert_eq!(
-        client.usage("codex", "default").await.unwrap_err(),
+        client
+            .usage("codex", "default")
+            .await
+            .unwrap()
+            .reading
+            .state,
+        UsageState::Disabled
+    );
+    assert_eq!(
+        client.usage("unsupported", "default").await.unwrap_err(),
         hey_proxy::usage::Error::Http(501)
     );
     assert_eq!(

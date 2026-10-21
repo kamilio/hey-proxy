@@ -241,19 +241,34 @@ async fn native_replay_stays_authenticated_and_fallback_keeps_the_original_carri
             .iter()
             .any(|p| p["thoughtSignature"] == "synthetic-text")
     );
-    for alteration in ["carrier", "visible", "model"] {
+    for alteration in ["carrier", "visible"] {
         let mut invalid = request.clone();
         invalid["model"] = json!("gemini/test");
         match alteration {
             "carrier" => invalid["input"][1]["encrypted_content"] = json!("hey_gemini_v1.altered"),
             "visible" => invalid["input"][2]["content"][0]["text"] = json!("Changed signed output"),
-            _ => invalid["model"] = json!("gemini/another"),
+            _ => unreachable!(),
         }
         let response = post(&proxy, &invalid).await;
         assert_eq!(response.status(), 400, "{alteration}");
         let _ = response.bytes().await.unwrap();
         assert_eq!(seen.lock().unwrap().len(), 3);
     }
+    // Model changes intentionally import visible history without reusing the old
+    // model's signed native turn. This differs from altered authenticated output.
+    let mut switched = request.clone();
+    switched["model"] = json!("gemini/another");
+    let response = post(&proxy, &switched).await;
+    assert_eq!(response.status(), 200);
+    let _: Value = response.json().await.unwrap();
+    let records = seen.lock().unwrap();
+    assert_eq!(records.len(), 4);
+    assert!(records[3].0.contains("/models/another:"));
+    let history = records[3].2["contents"].to_string();
+    assert!(history.contains("I will inspect git status."));
+    assert!(history.contains("Proposed action: git status --short"));
+    assert!(!history.contains("synthetic-thought"));
+    assert!(!history.contains("synthetic-text"));
 }
 
 #[tokio::test]

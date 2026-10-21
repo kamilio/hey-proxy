@@ -3,6 +3,55 @@
   "source": "https://developers.openai.com/api/docs/pricing",
   "currency": "USD",
   "prices": {
+    "gpt-6-astra": [
+      10,
+      1,
+      50,
+      12.5,
+      272000
+    ],
+    "gpt-6.1-sol": [
+      2,
+      0.1,
+      10,
+      2.5,
+      272000
+    ],
+    "gpt-6-luna": [
+      0.1,
+      0.01,
+      0.5,
+      0.125,
+      272000
+    ],
+    "gpt-6-sol": [
+      2,
+      0.2,
+      10,
+      2.5,
+      272000
+    ],
+    "gpt-5.6-sol": [
+      4,
+      0.4,
+      20,
+      5,
+      272000
+    ],
+    "gpt-5.6-terra": [
+      2,
+      0.2,
+      12,
+      2.5,
+      272000
+    ],
+    "gpt-5.6-luna": [
+      0.2,
+      0.02,
+      1.2,
+      0.25,
+      272000
+    ],
     "gpt-5.5": [
       5,
       0.5,
@@ -150,6 +199,8 @@
     ]
   },
   "aliases": {
+    "ultima-alpha": "gpt-6-astra",
+    "ultima": "gpt-6-astra",
     "gpt-4.1-2025-04-14": "gpt-4.1",
     "o3-2025-04-16": "o3",
     "gemini/gemini-3.1-pro-preview": "gemini-3.1-pro-preview",

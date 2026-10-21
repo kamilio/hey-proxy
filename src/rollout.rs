@@ -99,7 +99,16 @@ pub(crate) fn write_private(path: &Path, content: &[u8], backup: bool) -> Result
     file.persist(path)?;
     Ok(())
 }
+#[cfg(test)]
 pub fn configure_gemini(base_url: &str, model: &str, home: Option<&Path>) -> Result<()> {
+    configure_gemini_authenticated(base_url, model, home, None)
+}
+pub fn configure_gemini_authenticated(
+    base_url: &str,
+    model: &str,
+    home: Option<&Path>,
+    token: Option<&str>,
+) -> Result<()> {
     let url = reqwest::Url::parse(base_url)?;
     if url.scheme() != "http"
         || !matches!(url.host_str(), Some("127.0.0.1" | "[::1]" | "localhost"))
@@ -162,6 +171,9 @@ pub fn configure_gemini(base_url: &str, model: &str, home: Option<&Path>) -> Res
     provider["wire_api"] = value("responses");
     provider["requires_openai_auth"] = value(false);
     provider["supports_websockets"] = value(false);
+    if let Some(token) = token {
+        provider["experimental_bearer_token"] = value(token);
+    }
     // Older generated profiles disabled Codex recovery entirely. Upgrade those
     // defaults, while keeping any positive user-selected retry counts.
     for (key, default) in [("request_max_retries", 4), ("stream_max_retries", 5)] {
@@ -617,6 +629,7 @@ fn remote_config_with_key(config: &Config, host: &SshHost, key: Option<&str>) ->
         remote.api_keys.clear();
         remote.gemini = None;
         remote.claude = None;
+        remote.codex = None;
         remote.aliases.clear();
         remote.fallbacks.clear();
         remote.upstream_url = "https://api.openai.com".into();
@@ -632,6 +645,7 @@ pub(crate) async fn check_credentials(config: &Config) -> Result<()> {
     if config.api_keys.is_empty()
         && config.gemini.is_none()
         && config.claude.is_none()
+        && config.codex.is_none()
         && config.mode != Mode::Client
     {
         bail!("No provider credentials configured; edit the proxy config first");
@@ -1049,14 +1063,19 @@ pub async fn verify(
         );
     let doc = fs::read_to_string(home.join("config.toml"))?.parse::<DocumentMut>()?;
     let expected = format!("{base}/v1");
-    fn check(doc: &DocumentMut, expected: &str, token: Option<&str>) -> Result<()> {
-        if doc.get("model_provider").and_then(Item::as_str) != Some("hey-proxy") {
-            bail!("Codex does not select hey-proxy");
+    fn check_provider(
+        doc: &DocumentMut,
+        provider_id: &str,
+        expected: &str,
+        token: Option<&str>,
+    ) -> Result<()> {
+        if doc.get("model_provider").and_then(Item::as_str) != Some(provider_id) {
+            bail!("Codex does not select {provider_id}");
         }
         let provider = doc
             .get("model_providers")
-            .and_then(|p| p.get("hey-proxy"))
-            .context("Codex provider missing")?;
+            .and_then(|p| p.get(provider_id))
+            .with_context(|| format!("Codex provider {provider_id} missing"))?;
         if provider.get("base_url").and_then(Item::as_str) != Some(expected)
             || provider.get("wire_api").and_then(Item::as_str) != Some("responses")
             || provider.get("requires_openai_auth").and_then(Item::as_bool) != Some(false)
@@ -1080,7 +1099,7 @@ pub async fn verify(
         }
         Ok(())
     }
-    check(&doc, &expected, token.as_deref())?;
+    check_provider(&doc, "hey-proxy", &expected, token.as_deref())?;
     if let Some(profile) = doc.get("profile").and_then(Item::as_str) {
         if let Some(active) = doc.get("profiles").and_then(|p| p.get(profile))
             && (active.get("model_provider").and_then(Item::as_str) != Some("hey-proxy")
@@ -1094,12 +1113,22 @@ pub async fn verify(
         }
         let path = home.join(format!("{profile}.config.toml"));
         if path.exists() {
-            check(
+            check_provider(
                 &fs::read_to_string(path)?.parse::<DocumentMut>()?,
+                "hey-proxy",
                 &expected,
                 token.as_deref(),
             )?;
         }
+    }
+    let gemini_path = home.join("gemini.config.toml");
+    if gemini_path.exists() {
+        check_provider(
+            &fs::read_to_string(gemini_path)?.parse::<DocumentMut>()?,
+            "hey_proxy_gemini",
+            &expected,
+            token.as_deref(),
+        )?;
     }
     println!(
         "Verified {:?}: logs API, upstream/host connection and Codex configuration",
