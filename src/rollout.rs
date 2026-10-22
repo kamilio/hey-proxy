@@ -57,6 +57,9 @@ fn edit_codex_token(
     }
     // The proxy routes on uncompressed JSON model envelopes.
     table(doc.as_item_mut(), "features")?["enable_request_compression"] = value(false);
+    // Keep Codex from reporting usage directly to OpenAI around the proxy.
+    table(doc.as_item_mut(), "analytics")?["enabled"] = value(false);
+    table(doc.as_item_mut(), "otel")?["metrics_exporter"] = value("none");
     if let Some(profile) = doc.get("profile").and_then(Item::as_str).map(str::to_owned)
         && let Some(profiles) = doc.get_mut("profiles")
         && let Some(active) = profiles.get_mut(&profile)
@@ -68,6 +71,7 @@ fn edit_codex_token(
         active["approval_policy"] = value("on-request");
         active["approvals_reviewer"] = value("auto_review");
         table(active, "features")?["enable_request_compression"] = value(false);
+        table(active, "analytics")?["enabled"] = value(false);
         if let Some(model) = model {
             active["model"] = value(model);
         }
@@ -1399,7 +1403,7 @@ mod tests {
     use super::*;
     #[test]
     fn codex_changes_are_idempotent_and_preserve_unrelated_settings() {
-        let content = "# my configuration\nmodel = 'existing-model'\napproval_policy = 'on-request'\nprofile = 'work'\n[projects.'/project']\ntrust_level = 'trusted'\n[model_providers.other]\nname = 'Other'\n[profiles.work]\nmodel_provider = 'other'\n";
+        let content = "# my configuration\nmodel = 'existing-model'\napproval_policy = 'on-request'\nprofile = 'work'\n[projects.'/project']\ntrust_level = 'trusted'\n[model_providers.other]\nname = 'Other'\n[profiles.work]\nmodel_provider = 'other'\n[profiles.work.analytics]\nenabled = true\n";
         let edited = edit_codex(content, "http://127.0.0.1:8080/v1", None).unwrap();
         let doc = edited.parse::<DocumentMut>().unwrap();
         assert_eq!(doc["model"].as_str(), Some("existing-model"));
@@ -1420,6 +1424,12 @@ mod tests {
             doc["features"]["enable_request_compression"].as_bool(),
             Some(false)
         );
+        assert_eq!(doc["analytics"]["enabled"].as_bool(), Some(false));
+        assert_eq!(
+            doc["profiles"]["work"]["analytics"]["enabled"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(doc["otel"]["metrics_exporter"].as_str(), Some("none"));
         assert!(edited.contains("# my configuration"));
         assert_eq!(
             doc["model_providers"]["hey-proxy"]["stream_idle_timeout_ms"].as_integer(),
