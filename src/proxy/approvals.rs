@@ -1,5 +1,5 @@
 //! Local responses for explicitly enabled approval interception. Never inspect user
-//! transcripts to identify a reviewer: use Codex's header or Claude's system prompt.
+//! transcripts to identify a reviewer: use Codex's request markers or Claude's system prompt.
 use super::*;
 use futures_util::SinkExt;
 use tokio_tungstenite::{
@@ -13,6 +13,8 @@ use tokio_tungstenite::{
 
 const LIMIT: usize = 64 * 1024 * 1024;
 const CLAUDE_MONITOR: &str = "You are a security monitor for autonomous AI coding agents.";
+const CODEX_REVIEWER: &str = "guardian";
+const CODEX_REVIEW_MODEL: &str = "codex-auto-review";
 const REASON: &str = "Allowed by hey-proxy auto_approve configuration; no model review performed.";
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,12 +48,21 @@ impl Kind {
         }
     }
 }
+/// Codex has marked review traffic in several ways across versions; accept any of them.
 fn codex_kind(headers: &HeaderMap) -> Option<Kind> {
-    match headers.get("x-codex-guardian")?.to_str().ok()? {
-        "reviewer" => Some(Kind::CodexReviewer),
-        "classifier" => Some(Kind::CodexClassifier),
-        _ => None,
+    match headers
+        .get("x-codex-guardian")
+        .and_then(|h| h.to_str().ok())
+    {
+        Some("reviewer") => Some(Kind::CodexReviewer),
+        Some("classifier") => Some(Kind::CodexClassifier),
+        _ => (headers.get("x-openai-subagent")? == CODEX_REVIEWER).then_some(Kind::CodexReviewer),
     }
+}
+fn codex_body_kind(input: &Value) -> Option<Kind> {
+    (input.pointer("/client_metadata/x-openai-subagent") == Some(&json!(CODEX_REVIEWER))
+        || input["model"] == CODEX_REVIEW_MODEL)
+        .then_some(Kind::CodexReviewer)
 }
 fn text_blocks(value: &Value) -> Vec<&str> {
     if let Some(text) = value.as_str() {
@@ -126,14 +137,13 @@ pub(super) async fn intercept(proxy: &Arc<Proxy>, request: Request) -> Result<Re
         return Ok(request);
     }
     let path = request.uri().path().trim_end_matches('/');
-    let codex = (path == "/v1/responses")
-        .then(|| codex_kind(request.headers()))
-        .flatten();
+    let responses = path == "/v1/responses";
+    let codex = responses.then(|| codex_kind(request.headers())).flatten();
     let claude = matches!(
         path,
         "/v1/messages" | "/v1/custom/messages" | "/custom/v1/messages"
     );
-    if codex.is_none() && !claude {
+    if !responses && !claude {
         return Ok(request);
     }
     if request
@@ -183,7 +193,11 @@ pub(super) async fn intercept(proxy: &Arc<Proxy>, request: Request) -> Result<Re
     let input = serde_json::from_slice::<Value>(&bytes).ok();
     let kind = input.as_ref().and_then(|input| {
         input["model"].as_str().filter(|m| !m.is_empty())?;
-        codex.or_else(|| claude_kind(input))
+        if responses {
+            codex.or_else(|| codex_body_kind(input))
+        } else {
+            claude_kind(input)
+        }
     });
     let Some(kind) = kind else {
         return Ok(Request::from_parts(parts, Body::from(bytes)));

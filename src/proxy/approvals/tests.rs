@@ -200,6 +200,47 @@ async fn approval_formats_json_and_sse_are_local_on_every_supported_route() {
 }
 
 #[tokio::test]
+async fn codex_reviewer_is_recognized_by_each_marker_codex_has_used() {
+    let (url, proxy) = serve(
+        router(Config {
+            auto_approve: true,
+            ..Config::default()
+        })
+        .unwrap(),
+    )
+    .await;
+    let client = reqwest::Client::new();
+    for marker in ["subagent_header", "client_metadata", "review_model"] {
+        let mut input = fixture(Kind::CodexReviewer);
+        let mut h = HeaderMap::new();
+        match marker {
+            "subagent_header" => {
+                h.insert("x-openai-subagent", "guardian".parse().unwrap());
+            }
+            "client_metadata" => input["client_metadata"] = json!({"x-openai-subagent":"guardian"}),
+            _ => input["model"] = json!("codex-auto-review"),
+        }
+        let response = client
+            .post(format!("{url}/v1/responses"))
+            .headers(h)
+            .json(&input)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response
+                .headers()
+                .get("x-hey-proxy-auto-approved")
+                .map(|v| v.to_str().unwrap()),
+            Some("codex_reviewer"),
+            "{marker}"
+        );
+        assert_decision(Kind::CodexReviewer, &response.json().await.unwrap());
+    }
+    proxy.abort();
+}
+
+#[tokio::test]
 async fn disabled_and_unrelated_requests_reach_upstream_unchanged() {
     let (upstream_url, upstream) =
         serve(Router::new().fallback(|body: Bytes| async move { body })).await;
@@ -217,6 +258,7 @@ async fn disabled_and_unrelated_requests_reach_upstream_unchanged() {
             ("/v1/responses/compact", Kind::CodexReviewer, "none"),
             ("/v1/responses", Kind::CodexReviewer, "no_header"),
             ("/v1/responses", Kind::CodexReviewer, "unknown_header"),
+            ("/v1/responses", Kind::CodexReviewer, "other_subagent"),
             ("/v1/messages", Kind::ClaudeTool, "ordinary_tool"),
             ("/v1/messages", Kind::ClaudeXml, "unknown_format"),
         ] {
@@ -232,6 +274,11 @@ async fn disabled_and_unrelated_requests_reach_upstream_unchanged() {
                 }
                 "unknown_header" => {
                     h.insert("x-codex-guardian", "future-kind".parse().unwrap());
+                }
+                "other_subagent" => {
+                    h.clear();
+                    h.insert("x-openai-subagent", "review".parse().unwrap());
+                    input["client_metadata"] = json!({"x-openai-subagent":"compact"});
                 }
                 "ordinary_tool" => {
                     input["tools"][0]["name"] = json!("ordinary_tool");
