@@ -68,7 +68,7 @@ with tempfile.TemporaryDirectory() as directory:
     assert all(p.read_bytes()==data for p,data in initial.items())
 print('Rollout retention/preflight/rollback checks passed')
 
-# Actual service installation must not read, create, or rewrite Codex configuration.
+# Service installation applies the Codex settings through configure-codex.
 with tempfile.TemporaryDirectory() as directory:
     home = Path(directory)
     (home / '.hey-proxy').mkdir()
@@ -93,7 +93,10 @@ with tempfile.TemporaryDirectory() as directory:
         def open(self, *_args, **_kwargs): return Ready()
     with patch.object(Path, 'home', return_value=home), patch.object(service, 'run', side_effect=fake_run), patch.object(service, 'restart_macos'), patch.object(service.urllib.request, 'build_opener', return_value=Opener()), patch.object(service.time, 'sleep'):
         service._install(str(source_binary),str(home/'staged.json'),'http://127.0.0.1:8080/v1',str(codex),'gpt-4.1',prepared,None)
-    assert {p.name:p.read_bytes() for p in codex.iterdir()} == {'config.toml':sentinel,'gemini.config.toml':sentinel}
-    assert not any('configure-codex' in args or 'configure-gemini' in args or '--codex-home' in args for args in calls)
-    assert any('verify' in args for args in calls)
-print('Default service installation leaves all Codex files unchanged')
+    binary = str(home / '.cargo/bin/hey-proxy')
+    configure = (binary, 'configure-codex', '--base-url', 'http://127.0.0.1:8080/v1', '--proxy-config', str(home / '.hey-proxy/config.json'), '--codex-home', str(codex), '--model', 'gpt-4.1')
+    assert [args for args in calls if 'configure-codex' in args] == [configure]
+    # Codex is pointed at the proxy only after the proxy is verified.
+    assert calls.index(configure) > next(i for i, args in enumerate(calls) if 'verify' in args)
+    assert not any('configure-gemini' in args for args in calls)
+print('Service installation configures Codex after verifying the proxy')

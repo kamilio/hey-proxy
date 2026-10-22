@@ -19,6 +19,44 @@ fn table<'a>(doc: &'a mut Item, key: &str) -> Result<&'a mut Item> {
     }
     Ok(&mut doc[key])
 }
+enum Setting {
+    Str(&'static str),
+    Bool(bool),
+}
+/// Every Codex setting hey-proxy owns, applied by configure-codex and rollout:
+/// (dotted key, value, also applied to the active profile).
+const CODEX_SETTINGS: &[(&str, Setting, bool)] = &[
+    ("model_provider", Setting::Str("hey-proxy"), true),
+    ("approval_policy", Setting::Str("on-request"), true),
+    ("approvals_reviewer", Setting::Str("auto_review"), true),
+    // The proxy routes on uncompressed JSON model envelopes.
+    (
+        "features.enable_request_compression",
+        Setting::Bool(false),
+        true,
+    ),
+    // Keep Codex from reporting usage directly to OpenAI around the proxy.
+    ("analytics.enabled", Setting::Bool(false), true),
+    ("otel.metrics_exporter", Setting::Str("none"), false),
+];
+fn apply_codex_settings(item: &mut Item, profile: bool) -> Result<()> {
+    for (key, setting, in_profile) in CODEX_SETTINGS {
+        if profile && !in_profile {
+            continue;
+        }
+        let mut parts: Vec<&str> = key.split('.').collect();
+        let last = parts.pop().unwrap();
+        let mut target = &mut *item;
+        for part in parts {
+            target = table(target, part)?;
+        }
+        target[last] = match setting {
+            Setting::Str(s) => value(*s),
+            Setting::Bool(b) => value(*b),
+        };
+    }
+    Ok(())
+}
 #[cfg(test)]
 fn edit_codex(content: &str, base_url: &str, model: Option<&str>) -> Result<String> {
     edit_codex_token(content, base_url, model, None)
@@ -32,9 +70,7 @@ fn edit_codex_token(
     let mut doc = content
         .parse::<DocumentMut>()
         .context("Invalid Codex config TOML; left unchanged")?;
-    doc["model_provider"] = value("hey-proxy");
-    doc["approval_policy"] = value("on-request");
-    doc["approvals_reviewer"] = value("auto_review");
+    apply_codex_settings(doc.as_item_mut(), false)?;
     if let Some(model) = model {
         doc["model"] = value(model);
     }
@@ -55,11 +91,6 @@ fn edit_codex_token(
     if let Some(token) = token {
         provider["experimental_bearer_token"] = value(token);
     }
-    // The proxy routes on uncompressed JSON model envelopes.
-    table(doc.as_item_mut(), "features")?["enable_request_compression"] = value(false);
-    // Keep Codex from reporting usage directly to OpenAI around the proxy.
-    table(doc.as_item_mut(), "analytics")?["enabled"] = value(false);
-    table(doc.as_item_mut(), "otel")?["metrics_exporter"] = value("none");
     if let Some(profile) = doc.get("profile").and_then(Item::as_str).map(str::to_owned)
         && let Some(profiles) = doc.get_mut("profiles")
         && let Some(active) = profiles.get_mut(&profile)
@@ -67,11 +98,7 @@ fn edit_codex_token(
         if !active.is_table() {
             bail!("Active Codex profile must be a table");
         }
-        active["model_provider"] = value("hey-proxy");
-        active["approval_policy"] = value("on-request");
-        active["approvals_reviewer"] = value("auto_review");
-        table(active, "features")?["enable_request_compression"] = value(false);
-        table(active, "analytics")?["enabled"] = value(false);
+        apply_codex_settings(active, true)?;
         if let Some(model) = model {
             active["model"] = value(model);
         }

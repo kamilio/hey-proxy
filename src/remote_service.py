@@ -165,7 +165,6 @@ def _install(binary, source_config, base_url, codex_home, model, prepared, profi
     config = json.loads(config_path.read_text())
     if config.get('mode', 'standalone') == 'host':
         run(str(binary_path), '--config', str(config_path), 'host-keys', stdout=subprocess.DEVNULL)
-    # Codex setup is a separate, explicit CLI command. Rollout never edits its files.
     token = None
     if config.get('mode') == 'host':
         token = json.loads(config_path.with_suffix('.access-keys.json').read_text())['local']
@@ -232,7 +231,14 @@ def _install(binary, source_config, base_url, codex_home, model, prepared, profi
                 result = json.load(response)
                 if response.status != 200 or result.get('status') != 'completed':
                     raise RuntimeError('Gemini generation verification failed')
-    print('Proxy service and connections verified; Codex configuration unchanged', flush=True)
+    # Codex is configured only after the proxy it points at is verified.
+    codex = [str(binary_path), 'configure-codex', '--base-url', base_url, '--proxy-config', str(config_path)]
+    if codex_home:
+        codex += ['--codex-home', codex_home]
+    if model:
+        codex += ['--model', model]
+    run(*codex, stdout=subprocess.DEVNULL)
+    print('Proxy service, connections and Codex configuration verified', flush=True)
 
 
 if __name__ == '__main__':

@@ -112,11 +112,7 @@ hey-proxy rollout
 hey-proxy rollout --host workstation
 ```
 
-Rollout syncs the proxy's configuration and verifies the service. It never configures Codex. To opt in on a destination, run there:
-
-```sh
-hey-proxy configure-codex --base-url http://127.0.0.1:8080/v1
-```
+Rollout syncs the proxy's configuration and verifies the service. It then runs `configure-codex` on the destination, pointing Codex at that destination's proxy (`codex_home` and `model` in the host entry are passed through). The Codex settings hey-proxy owns are listed in one place, `CODEX_SETTINGS` in `src/rollout.rs`; add a setting there to apply it everywhere.
 
 Credential references are copied without resolving them into the source bundle. Configure 1Password, command credentials, or ADC on the destination first. Existing literal credentials must already match on the destination; rollout does not distribute them in plaintext. Destination credential checks happen before replacing the service.
 

@@ -268,7 +268,7 @@ codex --profile gemini
 
 This writes `gemini.config.toml` in Codex's configuration directory. It uses Responses over HTTP, disables request compression, and enables client retries. Re-running it updates that profile. See the [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
 
-Normal startup, `--init`, credential checks, and remote rollout do not create or modify Codex files.
+Normal startup, `--init`, and credential checks do not create or modify Codex files. Remote rollout runs `configure-codex` on each destination after verifying its proxy.
 
 ## Configure Gemini CLI — optional
 
@@ -380,7 +380,7 @@ The dashboard reads small, cached aggregates rather than request histories. A ba
 
 Spend uses reported tokens and published model rates, including Claude cache writes and reads. **Claude subscription usage is shown as its API-equivalent value, not extra subscription charges.** Unrecognized models and missing usage stay unpriced, and logging gaps are visible. Totals survive restarts; disabling persistence makes spend unavailable. Estimates exclude subscription fees, discounts, server-side tool charges and unreported retry usage. No prompts, response bodies or credentials are retained in request history.
 
-For SSH deployment, add hosts to `ssh_hosts` and run `hey-proxy rollout`. This installs the proxy service and syncs its proxy configuration. **Codex setup remains a separate command on each machine.** See [remote setup](docs/configuration.md#remote-setup) for host/client modes and credential requirements.
+For SSH deployment, add hosts to `ssh_hosts` and run `hey-proxy rollout`. This installs the proxy service and syncs its proxy configuration. It then applies the same Codex setup as `configure-codex` on each host. See [remote setup](docs/configuration.md#remote-setup) for host/client modes and credential requirements.
 
 ## Troubleshooting
 

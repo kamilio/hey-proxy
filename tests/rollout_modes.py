@@ -145,6 +145,15 @@ else: raise AssertionError(command)
         calls = (root/'calls').read_text().splitlines()
         assert calls[0].startswith('fixture-host ')
         host_keys = json.loads((root/'fixture-host/.hey-proxy/config.access-keys.json').read_text())
+        # Rollout applies the same Codex settings as configure-codex on every host.
+        import tomllib
+        for name, local_port in [('fixture-host', host_port), ('fixture-client', client_port), ('fixture-solo', solo_port)]:
+            codex = tomllib.loads((root/name/'.codex/config.toml').read_text())
+            provider = codex['model_providers']['hey-proxy']
+            assert provider['base_url'] == f'http://127.0.0.1:{local_port}/v1', name
+            assert provider.get('experimental_bearer_token') == (host_keys['local'] if name == 'fixture-host' else None), name
+            assert codex['model_provider'] == 'hey-proxy' and codex['analytics'] == {'enabled': False}, name
+            assert codex['otel'] == {'metrics_exporter': 'none'}, name
         client_config = json.loads((root/'fixture-client/.hey-proxy/config.json').read_text())
         assert isinstance(client_config['connection']['api_key'], dict) and client_config['connection']['api_key'].get('encrypted', '').startswith('v1:')
         exported = json.loads(subprocess.run([BINARY, '--config', str(root/'fixture-client/.hey-proxy/config.json'), 'export-config'], check=True, capture_output=True, text=True).stdout)
